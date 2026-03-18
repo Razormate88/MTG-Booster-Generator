@@ -110,14 +110,6 @@ local config = {
     maxDedupeAttempts = 8,
     requestRetryAttempts = 2,
 
-    -- request pacing / smoothness
-    requestSpacingSeconds = 0.05,
-    dedupeRetrySpacingSeconds = 0.10,
-    pageRequestSpacingSeconds = 0.05,
-
-    -- image fallback
-    packImageCheckTimeout = 8,
-
     -- Dynamic pack image lookup:
     -- FIN -> imageBaseUrl .. "fin" .. imageExtension
     imageBaseUrl = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/",
@@ -153,7 +145,7 @@ local data = {
 
 local packLua = [[
 local defaultSetCode = "???"
-local defaultPack = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/razor-booster-pack.jpg"
+local defaultPack = "https://steamusercontent-a.akamaihd.net/ugc/12555777445170015064/1F22F21DA19B1C5D668D761C2CA447889AE98A2A/"
 
 function tryObjectEnter()
     return false
@@ -425,47 +417,6 @@ local function inferPackImageUrl(setCode)
     end
     return config.imageBaseUrl .. string.lower(setCode) .. config.imageExtension
 end
-
-
-local function applyPackImage(obj, imageUrl)
-    if not obj then
-        return
-    end
-
-    obj.setCustomObject({
-        diffuse = imageUrl or config.defaultPackImage
-    })
-
-    obj.reload()
-end
-
-local function resolvePackImageUrl(setCode, callback)
-    local requestedUrl = inferPackImageUrl(setCode)
-
-    if not requestedUrl or requestedUrl == "" then
-        if callback then callback(config.defaultPackImage) end
-        return
-    end
-
-    if requestedUrl == config.defaultPackImage then
-        if callback then callback(config.defaultPackImage) end
-        return
-    end
-
-    WebRequest.get(requestedUrl, function(request)
-        local ok = request
-            and tonumber(request.response_code or 0) == 200
-            and not tostring(request.error or ""):match("%S")
-
-        if ok then
-            callback(requestedUrl)
-        else
-            print("Pack image missing for " .. tostring(setCode) .. ", falling back to default pack image.")
-            callback(config.defaultPackImage)
-        end
-    end)
-end
-
 
 local function makeHeaders()
     return {
@@ -780,17 +731,6 @@ PackBuilder.getRandomPackImage = function(setCode)
     return inferPackImageUrl(setCode)
 end
 
-PackBuilder.applyResolvedPackImage = function(obj, setCode, callback)
-    resolvePackImageUrl(setCode, function(finalUrl)
-        if obj then
-            applyPackImage(obj, finalUrl)
-        end
-        if callback then
-            callback(finalUrl)
-        end
-    end)
-end
-
 local function inferProfileFromMeta(meta)
     if not meta then
         return "default15"
@@ -943,31 +883,29 @@ PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, atte
     end
 
     for j, query in ipairs(urls) do
-        Wait.time(function()
-            local i = replaceIndices and replaceIndices[j] or j
-            local url = config.apiBaseURL .. urlEncode(query)
+        local i = replaceIndices and replaceIndices[j] or j
+        local url = config.apiBaseURL .. urlEncode(query)
 
-            WebRequest.custom(url, "GET", true, nil, makeHeaders(), function(request)
-                if request.response_code == 200 then
-                    local parsed = PackBuilder.safeDecode(request.text or "")
-                    if parsed and parsed.object ~= "error" then
-                        local cardData = PackBuilder.createCardDataFromCardObject(parsed, i)
-                        if cardData then
-                            deck.ContainedObjects[i] = cardData
-                            deck.DeckIDs[i] = cardData.CardID
-                            deck.CustomDeck[i] = cardData.CustomDeck[i]
-                        else
-                            table.insert(requestErrors, { message = "Failed to decode card data." })
-                        end
+        WebRequest.custom(url, "GET", true, nil, makeHeaders(), function(request)
+            if request.response_code == 200 then
+                local parsed = PackBuilder.safeDecode(request.text or "")
+                if parsed and parsed.object ~= "error" then
+                    local cardData = PackBuilder.createCardDataFromCardObject(parsed, i)
+                    if cardData then
+                        deck.ContainedObjects[i] = cardData
+                        deck.DeckIDs[i] = cardData.CardID
+                        deck.CustomDeck[i] = cardData.CustomDeck[i]
                     else
-                        table.insert(requestErrors, { message = "Scryfall returned an error for a card request." })
+                        table.insert(requestErrors, { message = "Failed to decode card data." })
                     end
                 else
-                    table.insert(requestErrors, { message = "HTTP error " .. tostring(request.response_code) })
+                    table.insert(requestErrors, { message = "Scryfall returned an error for a card request." })
                 end
-                finishRequest()
-            end)
-        end, (j - 1) * config.requestSpacingSeconds)
+            else
+                table.insert(requestErrors, { message = "HTTP error " .. tostring(request.response_code) })
+            end
+            finishRequest()
+        end)
     end
 
     Wait.condition(function()
@@ -997,7 +935,7 @@ PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, atte
 
             Wait.time(function()
                 PackBuilder.fetchDeckData(boosterID, setCode, dupeUrls, leaveObject, attempts + 1, deck, dupes, originalUrls)
-            end, config.dedupeRetrySpacingSeconds)
+            end, 0.1)
         else
             local boosterContents = {}
 
@@ -1082,9 +1020,7 @@ PackBuilder.fetchAllCardsForSet = function(boosterID, setCode, spec, leaveObject
             end
 
             if parsed.has_more and parsed.next_page then
-                Wait.time(function()
-                    fetchPage(parsed.next_page, page + 1)
-                end, config.pageRequestSpacingSeconds)
+                fetchPage(parsed.next_page, page + 1)
             else
                 finalize()
             end
@@ -1265,7 +1201,7 @@ function onObjectLeaveContainer(container, leaveObject)
     })
 
     leaveObject.createButton({
-        label = "resolving image...",
+        label = "remaining: ...",
         click_function = "noop",
         function_owner = self,
         position = { 0, 0.2, 1.6 },
@@ -1280,6 +1216,7 @@ function onObjectLeaveContainer(container, leaveObject)
     })
 
     leaveObject.setLuaScript("function tryObjectEnter() return false end")
+    leaveObject.setCustomObject({ diffuse = PackBuilder.getRandomPackImage(currentCode) })
 
     local function startGeneration()
         if currentCode == config.defaultSetCode then
@@ -1304,35 +1241,18 @@ function onObjectLeaveContainer(container, leaveObject)
         end
     end
 
-    local function startAfterImage()
-        if data.validation.code == currentCode and data.validation.state == "valid" then
-            startGeneration()
-        elseif data.validation.code == currentCode and data.validation.state == "invalid" then
-            startGeneration()
-        else
-            leaveObject.editButton({ index = 1, label = "checking set..." })
-            validateSetCode(currentCode, function()
-                if leaveObject then
-                    startGeneration()
-                end
-            end)
-        end
+    if data.validation.code == currentCode and data.validation.state == "valid" then
+        startGeneration()
+    elseif data.validation.code == currentCode and data.validation.state == "invalid" then
+        startGeneration()
+    else
+        leaveObject.editButton({ index = 1, label = "checking set..." })
+        validateSetCode(currentCode, function()
+            if leaveObject then
+                startGeneration()
+            end
+        end)
     end
-
-    PackBuilder.applyResolvedPackImage(leaveObject, currentCode, function(finalUrl)
-        if leaveObject then
-            local usingFallback = finalUrl == config.defaultPackImage
-            leaveObject.editButton({
-                index = 1,
-                label = usingFallback and "default image loaded" or "custom image loaded"
-            })
-            Wait.time(function()
-                if leaveObject then
-                    startAfterImage()
-                end
-            end, 0.05)
-        end
-    end)
 
     Wait.condition(
         function()
