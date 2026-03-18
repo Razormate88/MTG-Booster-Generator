@@ -1,6 +1,6 @@
 local AutoUpdater = {
-    name = "MTG Booster Generator",
-    version = "0.8.2",
+    name = "Razormate's MTG Booster Generator",
+    version = "0.9.0",
     versionUrl = "https://raw.githubusercontent.com/Razormate88/MTG-Booster-Generator/refs/heads/main/MTG-Booster-Generator.ver",
     scriptUrl = "https://raw.githubusercontent.com/Razormate88/MTG-Booster-Generator/refs/heads/main/MTG-Booster-Generator.lua",
     debug = false,
@@ -8,74 +8,132 @@ local AutoUpdater = {
     run = function(self, host)
         self.host = host
         if not self.host then
-            self:error("Error: host not set, ensure AutoUpdater:run(self) is in your onLoad() function")
+            self:error("host not set")
             return
         end
         self:checkForUpdate()
     end,
+
     checkForUpdate = function(self)
         WebRequest.get(self.versionUrl, function(request)
             if request.response_code ~= 200 then
-                self:error("Failed to check version (" .. request.response_code .. ": " .. request.error .. ")")
+                self:error("Failed to check version (" .. tostring(request.response_code) .. ": " .. tostring(request.error) .. ")")
                 return
             end
-            local remoteVersion = request.text:match("[^\r\n]+") or ""
-            if self:isNewerVersion(remoteVersion) then
+
+            local remoteVersion = (request.text or ""):match("[^\r\n]+") or ""
+            remoteVersion = remoteVersion:gsub("^%s+", ""):gsub("%s+$", "")
+
+            if remoteVersion ~= "" and self:isNewerVersion(remoteVersion) then
                 self:fetchNewScript(remoteVersion)
             end
         end)
     end,
+
     isNewerVersion = function(self, remoteVersion)
-        local function split(v)
-            return { v:match("^(%d+)%.?(%d*)%.?(%d*)") or 0 }
-        end
-        local r, l = split(remoteVersion), split(self.version)
-        for i = 1, math.max(#r, #l) do
-            local rv, lv = tonumber(r[i]) or 0, tonumber(l[i]) or 0
-            if rv ~= lv then
-                return rv > lv
+        local function splitVersion(v)
+            local parts = {}
+            for num in tostring(v or ""):gmatch("(%d+)") do
+                table.insert(parts, tonumber(num) or 0)
             end
+            return parts
         end
+
+        local remoteParts = splitVersion(remoteVersion)
+        local localParts = splitVersion(self.version)
+        local maxLen = math.max(#remoteParts, #localParts)
+
+        for i = 1, maxLen do
+            local rv = remoteParts[i] or 0
+            local lv = localParts[i] or 0
+            if rv > lv then return true end
+            if rv < lv then return false end
+        end
+
         return false
     end,
+
     fetchNewScript = function(self, newVersion)
         WebRequest.get(self.scriptUrl, function(request)
             if request.response_code ~= 200 then
-                self:error("Failed to fetch new script (" .. request.response_code .. ": " .. request.error .. ")")
+                self:error("Failed to fetch new script (" .. tostring(request.response_code) .. ": " .. tostring(request.error) .. ")")
                 return
             end
-            if request.text and #request.text > 0 then
-                self.host.setLuaScript(request.text)
-                self:print("Updated to version " .. newVersion)
-                Wait.condition(function()
-                    return not self.host or self.host.reload()
-                end, function()
-                    return not self.host or self.host.resting
-                end)
-            else
+
+            local newScript = request.text or ""
+            if newScript == "" then
                 self:error("New script is empty")
+                return
             end
+
+            self.host.setLuaScript(newScript)
+            self:print("Updated to version " .. tostring(newVersion))
+
+            Wait.condition(function()
+                if self.host then
+                    self.host.reload()
+                end
+            end, function()
+                return not self.host or self.host.resting
+            end)
         end)
     end,
+
     print = function(self, message)
-        print(self.name .. ": " .. message)
+        print(self.name .. ": " .. tostring(message))
     end,
+
     error = function(self, message)
         if self.debug then
-            error(self.name .. ": " .. message)
+            error(self.name .. ": " .. tostring(message))
+        else
+            print(self.name .. " ERROR: " .. tostring(message))
         end
     end,
 }
 
+
+
+
+
+
+
+
 local config = {
     backURL = 'https://steamusercontent-a.akamaihd.net/ugc/1647720103762682461/35EF6E87970E2A5D6581E7D96A99F8A575B7A15F/',
     apiBaseURL = 'https://api.scryfall.com/cards/random?q=',
-    defaultPackImage = "https://steamusercontent-a.akamaihd.net/ugc/12555777445170015064/1F22F21DA19B1C5D668D761C2CA447889AE98A2A/", -- same url used in packLua
-    defaultSetCode = "???", -- same setCode used in packLua
+    apiSearchBaseURL = 'https://api.scryfall.com/cards/search?q=',
+    apiSetBaseURL = 'https://api.scryfall.com/sets/',
+    defaultPackImage = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/razor-booster-pack.jpg",
+    defaultSetCode = "???",
     pollInterval = 0.25,
     maxDedupeAttempts = 8,
     requestRetryAttempts = 2,
-    enableAutoUpdate = false,
+
+    -- request pacing / smoothness
+    requestSpacingSeconds = 0.05,
+    dedupeRetrySpacingSeconds = 0.10,
+    pageRequestSpacingSeconds = 0.05,
+
+    -- image fallback
+    packImageCheckTimeout = 8,
+
+    -- Dynamic pack image lookup:
+    -- FIN -> imageBaseUrl .. "fin" .. imageExtension
+    imageBaseUrl = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/",
+    imageExtension = ".jpg",
+
+    -- Curated preview boxes only
+    previewSetCodes = {
+        "TMT", "TMTC", "TMTT",
+        "FIN", "FINC",
+        "STX", "MID", "KHM",
+        "LEA", "CMM"
+    },
+
+    previewColumns = 6,
+    previewSpacingX = 3,
+    previewSpacingZ = 6,
 }
 
 local data = {
@@ -84,21 +142,28 @@ local data = {
     timePassed = 0,
     lastDescription = "",
     requestQueue = {},
+
+    validation = {
+        code = nil,
+        state = "unknown", -- unknown | pending | valid | invalid
+        meta = nil,
+        message = nil,
+    },
 }
 
 local packLua = [[
--- Any MTG Booster Generator by CoRNeRNoTe
--- Most recent script can be found on GitHub:
--- https://github.com/cornernote/tabletop_simulator-mtg_booster_generator/blob/main/lua/booster-generator.lua
 local defaultSetCode = "???"
-local defaultPack = "https://steamusercontent-a.akamaihd.net/ugc/12555777445170015064/1F22F21DA19B1C5D668D761C2CA447889AE98A2A/"
+local defaultPack = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/razor-booster-pack.jpg"
+
 function tryObjectEnter()
     return false
 end
+
 function onObjectLeaveContainer(container)
     if container ~= self then
         return
     end
+
     Wait.condition(function()
         Wait.time(function()
             if container then
@@ -109,9 +174,12 @@ function onObjectLeaveContainer(container)
         return container and container.getQuantity() == 0
     end)
 end
+
 function onLoad()
     local setCode = string.upper(self.getDescription()):match("SET:%s*(%S+)") or self.getName():match("^(.-)%s+Booster$")
-    if self.getCustomObject().diffuse == defaultPack then
+    local custom = self.getCustomObject() or {}
+
+    if custom.diffuse == defaultPack then
         self.createButton({
             label = setCode and (setCode .. " Booster") or self.getName(),
             click_function = 'noop',
@@ -127,6 +195,7 @@ function onLoad()
             font_color = { 1, 1, 1, 95 },
         })
     end
+
     if setCode ~= defaultSetCode and #self.getObjects() > 0 then
         self.createButton({
             label = "Unpack",
@@ -142,45 +211,57 @@ function onLoad()
         })
     end
 end
+
 function unpackDeck()
     local contained = self.getObjects()
     if #contained == 0 then
         return
     end
+
     local entryGuid = contained[1].guid
     local takePos = self.getPosition() + Vector(0, 6, 0)
     local deck = self.takeObject({ guid = entryGuid, position = takePos, smooth = true })
     if not deck then
         return
     end
+
     deck.setLock(true)
     deck.setScale({ 2, 1, 2 })
+
     Wait.time(function()
         spreadDeck(deck)
     end, 0.1)
 end
+
 function spreadDeck(deck)
     if not deck then
         return
     end
+
     local startPos = self.getPosition() + Vector(-2.3 * 2, 2, 3.2)
     local colCount = 5
     local spacingX = 2.3
     local spacingZ = 3.2
     local total = 1
+
     if deck.tag == "Deck" then
         total = deck.getQuantity()
     end
+
     for index = 1, total do
         Wait.time(function()
             local row = math.floor((index - 1) / colCount)
             local col = (index - 1) % colCount
             local pos = startPos + Vector(col * spacingX, 2, -row * spacingZ)
+
             if deck.tag == "Deck" then
                 local card = deck.takeObject({ position = pos, smooth = true })
                 Wait.time(function()
-                    card.setScale({ 1, 1, 1 })
+                    if card then
+                        card.setScale({ 1, 1, 1 })
+                    end
                 end, 0.05)
+
                 if deck.remainder then
                     deck = deck.remainder
                     deck.setLock(true)
@@ -192,365 +273,650 @@ function spreadDeck(deck)
             end
         end, index * 0.8)
     end
+
     self.destruct()
 end
+
 function noop()
 end
 ]]
 
------------------------------------------------------------------------
--- BoosterUrls - builds URL lists for set types
------------------------------------------------------------------------
+local BuiltInOverrides = {
+    ['???'] = { profile = 'empty', preview = false },
 
-BoosterUrls = { }
+    -- custom / mixed products
+    TMT  = { profile = 'default14', sets = { 'TMT', 'PZA' }, name = "Teenage Mutant Ninja Turtles" },
+    TMTC = { profile = 'collector_custom', sets = { 'TMT', 'PZA' }, name = "Teenage Mutant Ninja Turtles Collector" },
+    TMTT = { profile = 'spawn_all', sets = { 'TMTT' }, category = 'tokens', name = "Teenage Mutant Ninja Turtles Tokens" },
 
-BoosterUrls.randomRarity = function(mythicChance, rareChance, uncommonChance)
-    if math.random(1, mythicChance or 36) == 1 then
-        return 'r:m'
-    elseif math.random(1, rareChance or 8) == 1 then
-        return 'r:r'
-    elseif math.random(1, uncommonChance or 4) == 1 then
-        return 'r:u'
-    else
-        return 'r:c'
-    end
+    TLA  = { profile = 'default14', name = "Avatar: The Last Airbender" },
+    TLAC = { profile = 'collector_custom', sets = { 'TLA', 'TLE' }, name = "Avatar: The Last Airbender Collector" },
+
+    SPM  = { profile = 'default14', sets = { 'SPM', 'MAR' }, name = "Marvel's Spider-Man" },
+    SPMC = { profile = 'collector_custom', sets = { 'SPM', 'MAR', 'SPE' }, name = "Marvel's Spider-Man Collector" },
+
+    FIN  = { profile = 'default14', sets = { 'FIN', 'FCA' }, name = "Final Fantasy" },
+    FINC = { profile = 'collector_custom', sets = { 'FIN', 'FCA', 'FIC' }, name = "Final Fantasy Collector" },
+
+    -- special profiles
+    STX = { profile = 'strixhaven_play' },
+    MID = { profile = 'transform_slot' },
+    VOW = { profile = 'transform_slot' },
+    DKA = { profile = 'transform_slot' },
+    ISD = { profile = 'transform_slot' },
+    SOI = { profile = 'transform_slot' },
+    EMN = { profile = 'transform_slot' },
+    KHM = { profile = 'snow_slot' },
+    CNS = { profile = 'conspiracy' },
+    CN2 = { profile = 'conspiracy' },
+    LEA = { profile = 'alpha15', name = "Limited Edition Alpha" },
+    MB1 = { profile = 'mystery_playtest' },
+    CMM = { profile = 'default20', name = "Commander Masters" },
+    CLB = { profile = 'default20' },
+    CMR = { profile = 'default20' },
+
+    -- tokens / art / small weird sets
+    TOK   = { profile = 'spawn_all', category = 'tokens' },
+    TDFT  = { profile = 'spawn_all', category = 'tokens' },
+    TMKM  = { profile = 'spawn_all', category = 'tokens' },
+    TOTJ  = { profile = 'spawn_all', category = 'tokens' },
+    TMH3  = { profile = 'spawn_all', category = 'tokens' },
+    TBLB  = { profile = 'spawn_all', category = 'tokens' },
+    TDSK  = { profile = 'spawn_all', category = 'tokens' },
+    TFDN  = { profile = 'spawn_all', category = 'tokens' },
+    TINR  = { profile = 'spawn_all', category = 'tokens' },
+    TDRC  = { profile = 'spawn_all', category = 'tokens' },
+    TPLST = { profile = 'spawn_all', category = 'tokens' },
+
+    TAR   = { profile = 'spawn_all', category = 'art_series' },
+    OARC  = { profile = 'spawn_all', category = 'art_series' },
+    ADFT  = { profile = 'spawn_all', category = 'art_series' },
+    AMKM  = { profile = 'spawn_all', category = 'art_series' },
+    AOTJ  = { profile = 'spawn_all', category = 'art_series' },
+    AMH3  = { profile = 'spawn_all', category = 'art_series' },
+    ABLB  = { profile = 'spawn_all', category = 'art_series' },
+    ADSK  = { profile = 'spawn_all', category = 'art_series' },
+    AFDN  = { profile = 'spawn_all', category = 'art_series' },
+}
+
+local function safeUpper(value)
+    return string.upper(tostring(value or ""))
 end
 
-BoosterUrls.chooseMasterpieceReplacement = function(sets, urls)
-    if type(sets) == "string" then
-        sets = { sets }
+local function shallowCopy(tbl)
+    local out = {}
+    for k, v in pairs(tbl or {}) do
+        out[k] = v
     end
-
-    local masterpieceSets = {
-        bfz = 'exp',
-        ogw = 'exp',
-        kld = 'mps',
-        aer = 'mps',
-        akh = 'mp2',
-        hou = 'mp2',
-        stx = 'sta',
-        tsp = 'tsb',
-        mb1 = 'fmb1',
-        mh2 = 'h1r',
-    }
-
-    for _, set in ipairs(sets) do
-        local masterpieceSet = masterpieceSets[set]
-        if masterpieceSet and math.random(1, 144) == 1 then
-            urls[#urls] = BoosterUrls.makeUrl(BoosterUrls.makeSetQuery(masterpieceSet))
-        end
-    end
+    return out
 end
 
-BoosterUrls.makeSetQuery = function(sets)
-    if type(sets) == "string" then
-        sets = { sets }
-    end
-
-    if #sets > 1 then
-        local query = "("
-        for i, set in ipairs(sets) do
-            query = query .. "set:" .. set
-            if i < #sets then
-                query = query .. "+or+"
+local function mergeTables(base, override)
+    local merged = shallowCopy(base or {})
+    for k, v in pairs(override or {}) do
+        if type(v) == "table" and type(merged[k]) == "table" then
+            local nested = shallowCopy(merged[k])
+            for nk, nv in pairs(v) do
+                nested[nk] = nv
             end
+            merged[k] = nested
+        else
+            merged[k] = v
         end
-        return query .. ")"
-    else
-        return "set:" .. sets[1]
     end
+    return merged
 end
 
-BoosterUrls.makeUrl = function(setQuery, filter)
-    return config.apiBaseURL .. setQuery .. "+" .. filter
+local function normalizeSetList(list, fallback)
+    local out = {}
+    local seen = {}
+    if type(list) ~= "table" then
+        return { safeUpper(fallback) }
+    end
+    for _, value in ipairs(list) do
+        local code = safeUpper(value)
+        if code ~= "" and not seen[code] then
+            seen[code] = true
+            table.insert(out, code)
+        end
+    end
+    if #out == 0 then
+        return { safeUpper(fallback) }
+    end
+    return out
 end
 
-BoosterUrls.basePackUrls = function(sets, includeBasics, extraCommons)
-    local urls = {}
-    local setQuery = BoosterUrls.makeSetQuery(sets)
-
-    if includeBasics then
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, "t:basic+unique:prints"))
-    else
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, "r:common+-t:basic"))
-    end
-
-    for c in ("wubrg"):gmatch(".") do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, "r:common+-t:basic+c>=" .. c))
-    end
-
-    extraCommons = extraCommons or 5
-    for i = 1, extraCommons do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, "r:common+-t:basic"))
-    end
-
-    return urls
+local function urlEncode(str)
+    str = tostring(str or "")
+    str = str:gsub("\n", "\r\n")
+    str = str:gsub("([^%w %-_%.~])", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end)
+    str = str:gsub(" ", "+")
+    return str
 end
 
-
-BoosterUrls.cloneTable = function(source)
-    local copy = {}
-    for i, value in ipairs(source) do
-        copy[i] = value
+local function joinQueries(parts)
+    local out = {}
+    for _, part in ipairs(parts or {}) do
+        if part and part ~= "" then
+            table.insert(out, part)
+        end
     end
-    return copy
+    return table.concat(out, " ")
 end
 
-BoosterUrls.makeFilterString = function(filters)
-    if not filters or filters == "" then
+local function scryfallSetClause(sets)
+    local clauses = {}
+    for _, code in ipairs(sets or {}) do
+        table.insert(clauses, "set:" .. string.lower(code))
+    end
+    if #clauses == 0 then
         return ""
+    elseif #clauses == 1 then
+        return clauses[1]
     end
-    if type(filters) == "table" then
-        return table.concat(filters, "+")
-    end
-    return tostring(filters)
+    return "(" .. table.concat(clauses, " OR ") .. ")"
 end
 
-BoosterUrls.appendFilters = function(url, filters)
-    local filterString = BoosterUrls.makeFilterString(filters)
-    if filterString == "" then
-        return url
+local function inferPackImageUrl(setCode)
+    local code = safeUpper(setCode)
+
+    if code == "" or code == config.defaultSetCode then
+        return config.defaultPackImage
     end
-    return url .. "+" .. filterString
+
+    if not config.imageBaseUrl or config.imageBaseUrl == "" then
+        return config.defaultPackImage
+    end
+
+    return config.imageBaseUrl .. string.lower(code) .. config.imageExtension
 end
 
-BoosterUrls.replaceSlot = function(urls, slotIndex, newUrl)
-    if urls[slotIndex] then
-        urls[slotIndex] = newUrl
+
+local function applyPackImage(obj, imageUrl)
+    if not obj then
+        return
     end
-    return urls
+
+    obj.setCustomObject({
+        diffuse = imageUrl or config.defaultPackImage
+    })
+
+    obj.reload()
 end
 
-BoosterUrls.excludeFilters = function(urls, filters, skipIndex)
-    for i, value in ipairs(urls) do
-        if i ~= skipIndex then
-            urls[i] = BoosterUrls.appendFilters(value, filters)
+local function resolvePackImageUrl(setCode, callback)
+    local requestedUrl = inferPackImageUrl(setCode)
+
+    if not requestedUrl or requestedUrl == "" then
+        if callback then callback(config.defaultPackImage) end
+        return
+    end
+
+    if requestedUrl == config.defaultPackImage then
+        if callback then callback(config.defaultPackImage) end
+        return
+    end
+
+    WebRequest.get(requestedUrl, function(request)
+        local ok = request
+            and tonumber(request.response_code or 0) == 200
+            and not tostring(request.error or ""):match("%S")
+
+        if ok then
+            callback(requestedUrl)
+        else
+            print("Pack image missing for " .. tostring(setCode) .. ", falling back to default pack image.")
+            callback(config.defaultPackImage)
         end
-    end
-    return urls
+    end)
 end
 
-BoosterUrls.buildPack = function(spec)
-    local sets = spec.sets or spec.set or {}
-    local includeBasics = (spec.includeBasics ~= false)
-    local extraCommons = spec.extraCommons or 0
-    local uncommons = spec.uncommons or 0
-    local raritySlots = spec.raritySlots or {}
-    local urls = BoosterUrls.basePackUrls(sets, includeBasics, extraCommons)
-    local setQuery = BoosterUrls.makeSetQuery(sets)
 
-    for i = 1, uncommons do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, "r:u"))
-    end
-    for _, rarityFilter in ipairs(raritySlots) do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, rarityFilter))
-    end
-
-    if spec.addCardType then
-        urls = BoosterUrls.addCardTypeToPack(urls, spec.addCardType)
-    end
-    if spec.swapLandForCommon then
-        urls = BoosterUrls.swapLandForCommon(urls)
-    end
-    if spec.masterpieces ~= false then
-        BoosterUrls.chooseMasterpieceReplacement(sets, urls)
-    end
-    return urls
+local function makeHeaders()
+    return {
+        ["User-Agent"] = "Razormate MTG Booster Generator",
+        ["Accept"] = "application/json",
+    }
 end
 
-BoosterUrls.alphaCardPack = function(sets)
-    local setQuery = BoosterUrls.makeSetQuery(sets)
-    local urls = BoosterUrls.basePackUrls(sets, true, 10)
+BoosterUrls = {}
 
-    for i = 1, 3 do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r:u'))
+BoosterUrls.reverseTable = function(tbl)
+    local out = {}
+    for i = #tbl, 1, -1 do
+        table.insert(out, tbl[i])
     end
-
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r:r'))
-
-    BoosterUrls.chooseMasterpieceReplacement(sets, urls)
-    return urls
-end
-
-BoosterUrls.default14CardPack = function(sets)
-    local setQuery = BoosterUrls.makeSetQuery(sets)
-    local urls = BoosterUrls.basePackUrls(sets, true, 1)
-
-    for i = 1, 3 do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r:u'))
-    end
-
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(8000, 300, 36)))
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(800, 30, 3)))
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(80, 3, 1)))
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(8, 1)))
-
-    BoosterUrls.chooseMasterpieceReplacement(sets, urls)
-    return urls
+    return out
 end
 
 BoosterUrls.default15CardPack = function(sets)
-    local setQuery = BoosterUrls.makeSetQuery(sets)
-    local urls = BoosterUrls.basePackUrls(sets, true, 5)
-
-    for i = 1, 3 do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r:u'))
-    end
-
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(8, 1)))
-
-    BoosterUrls.chooseMasterpieceReplacement(sets, urls)
-    return urls
+    local setClause = scryfallSetClause(sets)
+    return {
+        joinQueries({ setClause, 'r:mythic' }),
+        joinQueries({ setClause, 'r:rare' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+    }
 end
 
-BoosterUrls.default16CardPack = function(sets)
-    local setQuery = BoosterUrls.makeSetQuery(sets)
-    local urls = BoosterUrls.basePackUrls(sets, true, 3)
-
-    for i = 1, 3 do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r:u'))
-    end
-
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(800, 30, 3)))
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(80, 3, 1)))
-
-    for i = 1, 2 do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(8, 1)))
-    end
-
-    BoosterUrls.chooseMasterpieceReplacement(sets, urls)
-    return urls
+BoosterUrls.default14CardPack = function(sets)
+    local setClause = scryfallSetClause(sets)
+    return {
+        joinQueries({ setClause, 'r:mythic' }),
+        joinQueries({ setClause, 'r:rare' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+    }
 end
 
 BoosterUrls.default20CardPack = function(sets)
-    local setQuery = BoosterUrls.makeSetQuery(sets)
-    local urls = BoosterUrls.basePackUrls(sets, false, 5)
-
-    for i = 1, 5 do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r:u'))
+    local setClause = scryfallSetClause(sets)
+    local out = {}
+    for _ = 1, 13 do
+        table.insert(out, joinQueries({ setClause, 'r:common' }))
     end
-
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(800, 30, 3)))
-    table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(80, 3, 1)))
-
-    for i = 1, 2 do
-        table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(8, 1)))
+    for _ = 1, 6 do
+        table.insert(out, joinQueries({ setClause, 'r:uncommon' }))
     end
-
-    BoosterUrls.chooseMasterpieceReplacement(sets, urls)
-    return urls
+    table.insert(out, joinQueries({ setClause, 'r:rare OR r:mythic' }))
+    return out
 end
 
-BoosterUrls.addCardTypeToPack = function(pack, cardType)
-    local randomIndex = math.random(#pack - 1, #pack)
-    for i = 13, #pack do
-        if randomIndex == i then
-            pack[i] = pack[i] .. '+' .. cardType
-        else
-            pack[i] = pack[i] .. '+-(' .. cardType .. ')'
-        end
-    end
-    return pack
+BoosterUrls.collectorCustomPack = function(sets)
+    local setClause = scryfallSetClause(sets)
+    local flex = 'r:common OR r:uncommon OR r:rare OR r:mythic'
+    return {
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, flex }),
+        joinQueries({ setClause, 'r:uncommon OR r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+    }
 end
 
-BoosterUrls.createReplacementSlotPack = function(urls, sets, removeQuery, addQuery, slotIndex)
-    local setQuery = BoosterUrls.makeSetQuery(sets)
-    slotIndex = slotIndex or 7
-    for i, v in ipairs(urls) do
-        if i ~= slotIndex then
-            urls[i] = BoosterUrls.appendFilters(v, removeQuery)
-        else
-            urls[i] = BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity() .. addQuery)
-        end
-    end
-    return urls
+BoosterUrls.strixhavenPlayPack = function(sets)
+    local setClause = scryfallSetClause(sets)
+    return {
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ '(set:sta OR ' .. setClause .. ')', '-is:lesson' }),
+        joinQueries({ setClause, 'is:lesson' }),
+    }
 end
 
-BoosterUrls.swapLandForCommon = function(urls)
-    urls[1] = urls[7]
-    return urls
+BoosterUrls.conspiracyPack = function(sets)
+    local setClause = scryfallSetClause(sets)
+    return {
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'is:conspiracy' }),
+        joinQueries({ setClause, 'r:common OR r:uncommon OR r:rare OR r:mythic' }),
+    }
 end
 
-BoosterUrls.reverseTable = function(t)
-    local rev = {}
-    for i = #t, 1, -1 do
-        table.insert(rev, t[i])
-    end
-    return rev
+BoosterUrls.alpha15Pack = function(sets)
+    local setClause = scryfallSetClause(sets)
+    return {
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:rare' }),
+    }
 end
 
-BoosterUrls.getSetUrls = function(setCode)
-    local entry = setDefinitions[setCode]
-    if entry and entry.getUrls then
-        return BoosterUrls.reverseTable(entry.getUrls(setCode))
-    end
-    return BoosterUrls.reverseTable(BoosterUrls.default15CardPack(setCode))
+BoosterUrls.mysteryPlaytestPack = function(sets)
+    local setClause = scryfallSetClause(sets)
+    return {
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:common' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:uncommon' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, 'frame:future OR is:playtest' }),
+        joinQueries({ setClause, 't:land' }),
+    }
 end
 
------------------------------------------------------------------------
--- PackBuilder - fetches card info and builds a booster pack
------------------------------------------------------------------------
+Profiles = {}
+Profiles.empty = function(spec) return {} end
+Profiles.default15 = function(spec) return BoosterUrls.default15CardPack(spec.sets) end
+Profiles.default14 = function(spec) return BoosterUrls.default14CardPack(spec.sets) end
+Profiles.default20 = function(spec) return BoosterUrls.default20CardPack(spec.sets) end
+Profiles.collector_custom = function(spec) return BoosterUrls.collectorCustomPack(spec.sets) end
+Profiles.strixhaven_play = function(spec) return BoosterUrls.strixhavenPlayPack(spec.sets) end
+Profiles.conspiracy = function(spec) return BoosterUrls.conspiracyPack(spec.sets) end
+Profiles.alpha15 = function(spec) return BoosterUrls.alpha15Pack(spec.sets) end
+Profiles.mystery_playtest = function(spec) return BoosterUrls.mysteryPlaytestPack(spec.sets) end
+Profiles.spawn_all = function(spec) return {} end
 
-PackBuilder = {}
+Profiles.transform_slot = function(spec)
+    local base = BoosterUrls.default15CardPack(spec.sets)
+    base[7] = joinQueries({ scryfallSetClause(spec.sets), 'is:transform' })
+    return base
+end
 
-PackBuilder.cache = {}
+Profiles.snow_slot = function(spec)
+    local base = BoosterUrls.default15CardPack(spec.sets)
+    base[15] = joinQueries({ scryfallSetClause(spec.sets), 'type:basic is:snow' })
+    return base
+end
 
+PackBuilder = {
+    cache = {},
+}
 
-PackBuilder.safeDecode = function(jsonString)
-    if not jsonString or jsonString == "" then
+PackBuilder.safeDecode = function(text)
+    if not text or text == "" then
         return nil
     end
-    local ok, result = pcall(JSON.decode, jsonString)
+    local ok, decoded = pcall(JSON.decode, text)
     if ok then
-        return result
+        return decoded
     end
     return nil
 end
 
-PackBuilder.getRequestErrorMessage = function(request)
-    local errorInfo = PackBuilder.safeDecode(request.text)
-    if errorInfo and errorInfo.details then
-        return errorInfo.details
+PackBuilder.generateErrorNotecard = function(errorInfo)
+    return {
+        Transform = { posX = 0, posY = 0, posZ = 0, rotX = 0, rotY = 0, rotZ = 0, scaleX = 2, scaleY = 2, scaleZ = 1 },
+        Name = "Notecard",
+        Nickname = "Booster Generation Error",
+        Description = tostring(errorInfo.message or "Unknown error"),
+        Grid = false,
+        Snap = false
+    }
+end
+
+PackBuilder.generateInstructionNotecard = function()
+    return {
+        Transform = { posX = 0, posY = 0, posZ = 0, rotX = 0, rotY = 0, rotZ = 0, scaleX = 1, scaleY = 2, scaleZ = 1 },
+        Name = "Notecard",
+        Nickname = "MTG Booster Generator",
+        Description = "Set the box description like:\nSET: FIN\n\nIf the set code is invalid, an error card will be generated.",
+        Grid = false,
+        Snap = false
+    }
+end
+
+PackBuilder.findCardImage = function(card)
+    if not card then
+        return nil
     end
-    if request.error and request.error ~= "" then
-        return request.error
+    if card.image_uris and card.image_uris.normal then
+        return card.image_uris.normal
     end
-    return request.text or "Unknown request error"
+    if card.card_faces then
+        for _, face in ipairs(card.card_faces) do
+            if face.image_uris and face.image_uris.normal then
+                return face.image_uris.normal
+            end
+        end
+    end
+    return nil
 end
 
 PackBuilder.getCardDedupKey = function(cardData)
     if not cardData then
         return nil
     end
-    local memo = tostring(cardData.Memo or "")
-    local nickname = tostring(cardData.Nickname or "")
-    return memo .. "|" .. nickname
+    return tostring(cardData.Nickname or "") .. "|" .. tostring(cardData.Description or "")
 end
 
-PackBuilder.enqueueRequest = function(url, callback, position)
-    local entry = { url = url, callback = callback }
-    if position == "start" then
-        table.insert(data.requestQueue, 1, entry)
-    else
-        table.insert(data.requestQueue, entry)
+PackBuilder.createCardDataFromCardObject = function(card, index)
+    local image = PackBuilder.findCardImage(card)
+    if not image then
+        return nil
     end
+
+    local setCode = safeUpper(card.set)
+    local collector = tostring(card.collector_number or "")
+    local oracleId = tostring(card.oracle_id or card.id or "")
+
+    local description = "SET: " .. setCode
+    if collector ~= "" then
+        description = description .. "\nCOLLECTOR: " .. collector
+    end
+    if oracleId ~= "" then
+        description = description .. "\nORACLE: " .. oracleId
+    end
+
+    local cardID = index * 100
+    return {
+        Name = "Card",
+        Nickname = card.name or "Unknown Card",
+        Description = description,
+        CardID = cardID,
+        CustomDeck = {
+            [index] = {
+                FaceURL = image,
+                BackURL = config.backURL,
+                NumWidth = 1,
+                NumHeight = 1,
+                BackIsHidden = true,
+                UniqueBack = false,
+                Type = 0,
+            }
+        }
+    }
 end
 
-PackBuilder.processRequestQueue = function()
-    if #data.requestQueue == 0 then
+PackBuilder.extractUniqueCardKey = function(card)
+    if not card then
+        return nil
+    end
+    return tostring(card.id or (tostring(card.oracle_id or "") .. ":" .. tostring(card.collector_number or "") .. ":" .. tostring(card.set or "")))
+end
+
+PackBuilder.getRandomPackImage = function(setCode)
+    return inferPackImageUrl(setCode)
+end
+
+PackBuilder.applyResolvedPackImage = function(obj, setCode, callback)
+    resolvePackImageUrl(setCode, function(finalUrl)
+        if obj then
+            applyPackImage(obj, finalUrl)
+        end
+        if callback then
+            callback(finalUrl)
+        end
+    end)
+end
+
+local function inferProfileFromMeta(meta)
+    if not meta then
+        return "default15"
+    end
+
+    local setType = string.lower(meta.set_type or "")
+    local cardCount = tonumber(meta.card_count or 0) or 0
+
+    if setType == "token" or setType == "memorabilia" then
+        return "spawn_all"
+    end
+
+    if cardCount > 0 and cardCount < 14 then
+        return "spawn_all"
+    end
+
+    if setType == "commander" then
+        return "default20"
+    end
+
+    return "default15"
+end
+
+local function resolveSetSpec(setCode)
+    local code = safeUpper(setCode)
+    local override = BuiltInOverrides[code] or {}
+    local meta = nil
+
+    if data.validation.code == code and data.validation.state == "valid" then
+        meta = data.validation.meta
+    end
+
+    local spec = {
+        code = code,
+        name = (meta and meta.name) or code,
+        date = (meta and meta.released_at) or "",
+        set_type = (meta and meta.set_type) or "",
+        card_count = tonumber((meta and meta.card_count) or 0) or 0,
+        sets = { code },
+        profile = inferProfileFromMeta(meta),
+        category = nil,
+        image = inferPackImageUrl(code),
+        spawnAll = false,
+    }
+
+    spec = mergeTables(spec, override)
+    spec.sets = normalizeSetList(spec.sets, code)
+    spec.spawnAll = spec.profile == "spawn_all"
+
+    return spec
+end
+
+BoosterUrls.getSetUrls = function(setCode)
+    local spec = resolveSetSpec(setCode)
+    local builder = Profiles[spec.profile] or Profiles.default15
+    return BoosterUrls.reverseTable(builder(spec))
+end
+
+local function validateSetCode(code, callback)
+    local upper = safeUpper(code)
+
+    if upper == "" or upper == config.defaultSetCode then
+        data.validation.code = upper
+        data.validation.state = "unknown"
+        data.validation.meta = nil
+        data.validation.message = nil
+        if callback then callback(false, nil) end
         return
     end
-    local request = table.remove(data.requestQueue, 1)
-    local headers = {
-        ['User-Agent'] = AutoUpdater.name .. '/' .. AutoUpdater.version,
-        ['Accept'] = 'application/json'
-    }
-    WebRequest.custom(request.url, "GET", true, nil, headers, request.callback)
+
+    if data.validation.code == upper and data.validation.state == "valid" then
+        if callback then callback(true, data.validation.meta) end
+        return
+    end
+
+    if data.validation.code == upper and data.validation.state == "invalid" then
+        if callback then callback(false, nil) end
+        return
+    end
+
+    data.validation.code = upper
+    data.validation.state = "pending"
+    data.validation.meta = nil
+    data.validation.message = nil
+
+    local url = config.apiSetBaseURL .. string.lower(upper)
+    WebRequest.custom(url, "GET", true, nil, makeHeaders(), function(request)
+        if data.validation.code ~= upper then
+            return
+        end
+
+        if request.response_code ~= 200 then
+            data.validation.state = "invalid"
+            data.validation.meta = nil
+            data.validation.message = "Set code not found on Scryfall."
+            if callback then callback(false, nil) end
+            return
+        end
+
+        local parsed = PackBuilder.safeDecode(request.text or "")
+        if not parsed or parsed.object == "error" or not parsed.code then
+            data.validation.state = "invalid"
+            data.validation.meta = nil
+            data.validation.message = "Set code not found on Scryfall."
+            if callback then callback(false, nil) end
+            return
+        end
+
+        data.validation.state = "valid"
+        data.validation.meta = parsed
+        data.validation.message = nil
+        if callback then callback(true, parsed) end
+    end)
 end
 
 PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, attempts, existingDeck, replaceIndices, originalUrls)
     attempts = attempts or 0
     originalUrls = originalUrls or urls
+
     local deck = existingDeck or {
         Transform = { posX = 0, posY = 0, posZ = 0, rotX = 0, rotY = 180, rotZ = 0, scaleX = 1, scaleY = 1, scaleZ = 1 },
         Name = "Deck",
@@ -564,37 +930,61 @@ PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, atte
     local requestsCompleted = 0
     local requestErrors = {}
 
-    for j, url in ipairs(urls) do
-        local i = replaceIndices and replaceIndices[j] or j
-        PackBuilder.enqueueRequest(url, function(request)
-            if request.response_code == 200 then
-                local cardData = PackBuilder.createCardDataFromJSON(request.text, i)
-                if cardData then
-                    deck.ContainedObjects[i] = cardData
-                    deck.DeckIDs[i] = cardData.CardID
-                    deck.CustomDeck[i] = cardData.CustomDeck[i]
-                end
-            else
-                local message = PackBuilder.getRequestErrorMessage(request)
-                table.insert(requestErrors, { url = url, message = message })
-            end
-            requestsCompleted = requestsCompleted + 1
-            local remaining = requestsPending - requestsCompleted
-            local label = "remaining: " .. (remaining + 1)
-            if attempts > 0 then
-                label = "deduping: " .. (attempts + 1) .. ": " .. (remaining + 1)
-            end
-            if leaveObject then
+    if requestsPending == 0 then
+        PackBuilder.cache[boosterID] = { PackBuilder.generateInstructionNotecard() }
+        return
+    end
+
+    local function finishRequest()
+        requestsCompleted = requestsCompleted + 1
+        local remaining = requestsPending - requestsCompleted
+        local label = "remaining: " .. remaining
+        if attempts > 0 then
+            label = "deduping: " .. attempts .. ": " .. remaining
+        end
+        if leaveObject then
+            pcall(function()
                 leaveObject.editButton({ index = 1, label = label })
-            end
-        end, existingDeck and "start" or "end")
+            end)
+        end
+    end
+
+    for j, query in ipairs(urls) do
+        Wait.time(function()
+            local i = replaceIndices and replaceIndices[j] or j
+            local url = config.apiBaseURL .. urlEncode(query)
+
+            WebRequest.custom(url, "GET", true, nil, makeHeaders(), function(request)
+                if request.response_code == 200 then
+                    local parsed = PackBuilder.safeDecode(request.text or "")
+                    if parsed and parsed.object ~= "error" then
+                        local cardData = PackBuilder.createCardDataFromCardObject(parsed, i)
+                        if cardData then
+                            deck.ContainedObjects[i] = cardData
+                            deck.DeckIDs[i] = cardData.CardID
+                            deck.CustomDeck[i] = cardData.CustomDeck[i]
+                        else
+                            table.insert(requestErrors, { message = "Failed to decode card data." })
+                        end
+                    else
+                        table.insert(requestErrors, { message = "Scryfall returned an error for a card request." })
+                    end
+                else
+                    table.insert(requestErrors, { message = "HTTP error " .. tostring(request.response_code) })
+                end
+                finishRequest()
+            end)
+        end, (j - 1) * config.requestSpacingSeconds)
     end
 
     Wait.condition(function()
-        if leaveObject == null then
+        if leaveObject == nil then
             return
         end
-        local seen, dupes = {}, {}
+
+        local seen = {}
+        local dupes = {}
+
         for i, card in ipairs(deck.ContainedObjects) do
             if card then
                 local dedupKey = PackBuilder.getCardDedupKey(card)
@@ -605,24 +995,29 @@ PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, atte
                 end
             end
         end
+
         if #dupes > 0 and attempts < config.maxDedupeAttempts then
             local dupeUrls = {}
             for _, i in ipairs(dupes) do
                 table.insert(dupeUrls, originalUrls[i])
             end
+
             Wait.time(function()
                 PackBuilder.fetchDeckData(boosterID, setCode, dupeUrls, leaveObject, attempts + 1, deck, dupes, originalUrls)
-            end, 0.1)
+            end, config.dedupeRetrySpacingSeconds)
         else
             local boosterContents = {}
+
             if setCode == config.defaultSetCode then
                 table.insert(boosterContents, PackBuilder.generateInstructionNotecard())
+            elseif #deck.ContainedObjects == 0 then
+                table.insert(boosterContents, PackBuilder.generateErrorNotecard({ message = "Could not generate any cards for this booster." }))
             else
                 table.insert(boosterContents, deck)
             end
 
-            for _, error in ipairs(requestErrors) do
-                table.insert(boosterContents, PackBuilder.generateErrorNotecard(error))
+            for _, errorInfo in ipairs(requestErrors) do
+                table.insert(boosterContents, PackBuilder.generateErrorNotecard(errorInfo))
             end
 
             PackBuilder.cache[boosterID] = boosterContents
@@ -632,726 +1027,115 @@ PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, atte
     end)
 end
 
-PackBuilder.generateErrorNotecard = function(error)
-    return {
-        Transform = { posX = 0, posY = 0, posZ = 0, rotX = 0, rotY = 0, rotZ = 0, scaleX = 1, scaleY = 1, scaleZ = 1 },
-        Name = "Notecard",
-        Nickname = "Booster Generation Error",
-        Description = "url: " .. error.url .. "\n\n" .. error.message,
-        Grid = false, Snap = false
+PackBuilder.fetchAllCardsForSet = function(boosterID, setCode, spec, leaveObject)
+    local deck = {
+        Transform = { posX = 0, posY = 0, posZ = 0, rotX = 0, rotY = 180, rotZ = 0, scaleX = 1, scaleY = 1, scaleZ = 1 },
+        Name = "Deck",
+        Nickname = setCode .. " Booster",
+        DeckIDs = {},
+        CustomDeck = {},
+        ContainedObjects = {},
     }
-end
 
-PackBuilder.generateInstructionNotecard = function()
-    local setsWithPackImages = {}
-    for code, setData in pairs(setDefinitions) do
-        if setData.packImage then
-            table.insert(setsWithPackImages, code)
+    local uniqueMap = {}
+    local indexCounter = 0
+
+    local function finalize()
+        if #deck.ContainedObjects == 0 then
+            PackBuilder.cache[boosterID] = {
+                PackBuilder.generateErrorNotecard({ message = "No cards found for this set." })
+            }
+        else
+            PackBuilder.cache[boosterID] = { deck }
         end
     end
-    return {
-        Transform = { posX = 0, posY = 0, posZ = 0, rotX = 0, rotY = 0, rotZ = 0, scaleX = 1, scaleY = 1, scaleZ = 1, },
-        Name = "Notecard",
-        Nickname = 'REPLACE "SET: ???" IN BOX DESCRIPTION',
-        Description = "\nAlmost all sets are supported, see:"
-                .. "\nhttps://scryfall.com/sets"
-                .. "\n"
-                .. "\nCustom pack images are available for:"
-                .. "\n" .. table.concat(setsWithPackImages, ", "),
-        Grid = false, Snap = false
-    }
-end
 
-PackBuilder.createCardDataFromJSON = function(jsonString, cardIndex)
-    local card = PackBuilder.safeDecode(jsonString)
-    if not card or not card.name then
-        error("Failed to decode JSON: " .. tostring(jsonString))
-        return
-    end
+    local function fetchPage(urlOrQuery, page)
+        local targetUrl = tostring(urlOrQuery or "")
+        if not targetUrl:match("^https?://") then
+            targetUrl = config.apiSearchBaseURL .. urlEncode(targetUrl)
+        end
 
-    local cardName, cardOracle, faceURL, backData
-    local imageQuality = 'large'
-    local cacheBuster = (card.image_status ~= 'highres_scan') and ('?' .. os.date("%Y%m%d")) or ""
+        WebRequest.custom(targetUrl, "GET", true, nil, makeHeaders(), function(request)
+            if request.response_code ~= 200 then
+                finalize()
+                return
+            end
 
-    if card.card_faces then
-        if card.image_uris then
-            cardName = PackBuilder.formattedName(card.card_faces[1])
-            cardOracle = ""
-            for i, face in ipairs(card.card_faces) do
-                cardOracle = cardOracle .. PackBuilder.formattedName(face) .. '\n' .. PackBuilder.getCardOracleText(face)
-                if i < #card.card_faces then
-                    cardOracle = cardOracle .. '\n'
+            local parsed = PackBuilder.safeDecode(request.text or "")
+            if not parsed or parsed.object == "error" then
+                finalize()
+                return
+            end
+
+            if leaveObject then
+                pcall(function()
+                    leaveObject.editButton({ index = 1, label = "page: " .. tostring(page) })
+                end)
+            end
+
+            for _, card in ipairs(parsed.data or {}) do
+                local uniqueKey = PackBuilder.extractUniqueCardKey(card)
+                if uniqueKey and not uniqueMap[uniqueKey] then
+                    uniqueMap[uniqueKey] = true
+                    indexCounter = indexCounter + 1
+                    local cardData = PackBuilder.createCardDataFromCardObject(card, indexCounter)
+                    if cardData then
+                        deck.ContainedObjects[indexCounter] = cardData
+                        deck.DeckIDs[indexCounter] = cardData.CardID
+                        deck.CustomDeck[indexCounter] = cardData.CustomDeck[indexCounter]
+                    end
                 end
             end
-            faceURL = card.image_uris.normal:gsub('%?.*', ''):gsub('normal', imageQuality) .. cacheBuster
-        else
-            local face, back = card.card_faces[1], card.card_faces[2]
-            cardName = PackBuilder.formattedName(face, 'DFC')
-            cardOracle = PackBuilder.getCardOracleText(face)
-            faceURL = face.image_uris.normal:gsub('%?.*', ''):gsub('normal', imageQuality) .. cacheBuster
-            local backURL = back.image_uris.normal:gsub('%?.*', ''):gsub('normal', imageQuality) .. cacheBuster
-            local backCardIndex = cardIndex + 100
-            backData = {
-                Transform = { posX = 0, posY = 0, posZ = 0, rotX = 0, rotY = 0, rotZ = 0, scaleX = 1, scaleY = 1, scaleZ = 1 },
-                Name = "Card",
-                Nickname = PackBuilder.formattedName(back, 'DFC'),
-                Description = PackBuilder.getCardOracleText(back),
-                Memo = card.oracle_id,
-                CardID = backCardIndex * 100,
-                CustomDeck = {
-                    [backCardIndex] = {
-                        FaceURL = backURL, BackURL = config.backURL, NumWidth = 1, NumHeight = 1,
-                        Type = 0, BackIsHidden = true, UniqueBack = false
-                    }
-                }
-            }
-        end
-    else
-        cardName = PackBuilder.formattedName(card)
-        cardOracle = PackBuilder.getCardOracleText(card)
-        faceURL = card.image_uris.normal:gsub('%?.*', ''):gsub('normal', imageQuality) .. cacheBuster
-    end
 
-    local cardData = {
-        Transform = { posX = 0, posY = 0, posZ = 0, rotX = 0, rotY = 0, rotZ = 0, scaleX = 1, scaleY = 1, scaleZ = 1 },
-        Name = "Card",
-        Nickname = cardName,
-        Description = cardOracle,
-        Memo = card.oracle_id,
-        CardID = cardIndex * 100,
-        CustomDeck = {
-            [cardIndex] = {
-                FaceURL = faceURL, BackURL = config.backURL, NumWidth = 1, NumHeight = 1,
-                Type = 0, BackIsHidden = true, UniqueBack = false
-            }
-        }
-    }
-
-    if backData then
-        cardData.States = { [2] = backData }
-    end
-    return cardData
-end
-
-PackBuilder.formattedName = function(face, typeSuffix)
-    return string.format(
-            '%s\n%s %s CMC %s',
-            face.name:gsub('"', ''),
-            face.type_line,
-            tostring(face.cmc or 0),
-            typeSuffix or ""
-    )            :gsub('%s$', '')
-end
-
-PackBuilder.getCardOracleText = function(cardFace)
-    local powerToughness = ""
-    if cardFace.power then
-        powerToughness = '\n[b]' .. tostring(cardFace.power) .. '/' .. tostring(cardFace.toughness) .. '[/b]'
-    elseif cardFace.loyalty then
-        powerToughness = '\n[b]' .. tostring(cardFace.loyalty) .. '[/b]'
-    end
-    return (cardFace.oracle_text or "") .. powerToughness
-end
-
-PackBuilder.getRandomPackImage = function(setCode)
-    local packImage = setDefinitions[setCode] and setDefinitions[setCode].packImage or config.defaultPackImage
-    if type(packImage) == "table" then
-        packImage = packImage[math.random(1, #packImage)]
-    end
-    return packImage
-end
-
------------------------------------------------------------------------
--- SetDefinitions - defines the booster set name, contents, etc
------------------------------------------------------------------------
-
-
-local function defaultSetEntry(def)
-    local entry = {}
-    for k, v in pairs(def or {}) do
-        entry[k] = v
-    end
-    return entry
-end
-
-local function makePackDef(name, date, packImage, getUrls)
-    return {
-        name = name,
-        date = date,
-        packImage = packImage,
-        getUrls = getUrls,
-    }
-end
-
-setDefinitions = {
-    TLA = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/18426860329109062848/8608CEB001CF861FC4A6AEB7DEFC99036DDCBC03/",
-        name = "Avatar: The Last Airbender",
-        date = "2025-11-21",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    TLAC = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/16172442222396970495/9B571ECCFD4A01EE6287BD6BE1F00D38112F1303/",
-        name = "Avatar: The Last Airbender Collector",
-        date = "2025-11-21",
-        getUrls = function(set)
-            return BoosterUrls.default15CardPack({ "TLA", "TLE" })
-        end,
-    },
-    SPM = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/11967831829609287872/6D168435BEFB1C1EE50A4F0B286BF4D8D9FEA7C8/",
-        name = "Marvel's Spider-Man",
-        date = "2025-09-26",
-        getUrls = function(set)
-            return BoosterUrls.default14CardPack({ "SPM", "MAR" })
-        end,
-    },
-    SPMC = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/14447519524209323137/A7BC08D5AFE8EB8953D3E6F767C7259CDDAAEB34/",
-        name = "Marvel's Spider-Man Collector",
-        date = "2025-09-26",
-        getUrls = function(set)
-            return BoosterUrls.default15CardPack({ "SPM", "MAR", "SPE" })
-        end,
-    },
-    FIN = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/16627771293824374075/C5699273F56C725E5F909A4CF68E0BBB40CB3212/",
-        name = "Final Fantasy",
-        date = "2025-06-13",
-        getUrls = function(set)
-            return BoosterUrls.default14CardPack({ "FIN", "FCA" })
-        end,
-    },
-    FINC = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/12474440936943111473/5DD973A1A676B0AF1D27C63CB43CE0B91FD45134/",
-        name = "Final Fantasy Collector",
-        date = "2025-06-13",
-        getUrls = function(set)
-            return BoosterUrls.default15CardPack({ "FIN", "FCA", "FIC" })
-        end,
-    },
-    TMT = makePackDef(
-        "Teenage Mutant Ninja Turtles",
-        "2026-03-06",
-        "https://steamusercontent-a.akamaihd.net/ugc/10486510128165068236/F8124735459318D0D57BA6BB56A1E4EEE57F72B2/",
-        function(set)
-            return BoosterUrls.buildPack({
-                sets = { "TMT", "PZA" },
-                includeBasics = true,
-                extraCommons = 1,
-                uncommons = 3,
-                raritySlots = {
-                    BoosterUrls.randomRarity(8000, 300, 36),
-                    BoosterUrls.randomRarity(800, 30, 3),
-                    BoosterUrls.randomRarity(80, 3, 1),
-                    BoosterUrls.randomRarity(8, 1),
-                },
-            })
-        end
-    ),
-    TMTC = makePackDef(
-        "Teenage Mutant Ninja Turtles Collector",
-        "2026-03-06",
-        "https://steamusercontent-a.akamaihd.net/ugc/14419565199248419732/6F98D7FFCD80045538360B4CA12D5AB9E406BF66/",
-        function(set)
-            return BoosterUrls.buildPack({
-                sets = { "TMT", "PZA" },
-                includeBasics = true,
-                extraCommons = 5,
-                uncommons = 3,
-                raritySlots = {
-                    BoosterUrls.randomRarity(800, 30, 3),
-                    BoosterUrls.randomRarity(80, 3, 1),
-                    BoosterUrls.randomRarity(8, 1),
-                },
-            })
-        end
-    ),
-    TMTX = makePackDef(
-        "Teenage Mutant Ninja Turtles Extended",
-        "2026-03-06",
-        "https://steamusercontent-a.akamaihd.net/ugc/10486510128165068236/F8124735459318D0D57BA6BB56A1E4EEE57F72B2/",
-        function(set)
-            return BoosterUrls.buildPack({
-                sets = { "TMT", "PZA", "TMC" },
-                includeBasics = true,
-                extraCommons = 5,
-                uncommons = 3,
-                raritySlots = {
-                    BoosterUrls.randomRarity(800, 30, 3),
-                    BoosterUrls.randomRarity(80, 3, 1),
-                    BoosterUrls.randomRarity(8, 1),
-                },
-            })
-        end
-    ),
-    BOK = {
-        packImage = "https://i.imgur.com/t6UP7lt.jpg",
-        name = "Betrayers of Kamigawa",
-        date = "2025-02-04",
-        getUrls = function(set)
-            local urls = BoosterUrls.swapLandForCommon(BoosterUrls.default15CardPack(set))
-            urls[15] = urls[15]:gsub("r:m", "r:r")
-            return urls
-        end,
-    },
-    CHK = {
-        packImage = "https://i.imgur.com/E7IW8Tv.jpg",
-        name = "Champions of Kamigawa",
-        date = "2024-10-01",
-    },
-    INR = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33314777894966905/8D9807FCC410A72E23B650DD45417ADE665B4E87/",
-        name = "Innistrad Remaster",
-        date = "2025-01-24",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    DFT = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33315411545885589/0C728D0BDFAB373310773FA4546CC4E08B1B11A1/",
-        name = "Aetherdrift",
-        date = "2025-02-14",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    EOE = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/15223391781034002798/18D4F50FA52D5739A7AAF47270CD89A8F3161F20/",
-        name = "Edge of Eternities",
-        date = "2025-08-01",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    TDM = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33320655968555543/9ADDB19799EBAE44174466FE19E0C52F73EDDAE4/",
-        name = "Tarkir: Dragonstorm",
-        date = "2025-04-11",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    FDN = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33313055666062860/0DFCD530284A8A4EC67CCEA18399BDE9405F3C3C/",
-        name = "Foundations",
-        date = "2024-11-15",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    DSK = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33313055666215369/BFD6BBAC0DE7F1F5C810F4FFCA8EF5E50EC8A03E/",
-        name = "Duskmourn: House of Horror",
-        date = "2024-09-27",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    BLB = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33313055666242938/FA118E357C5820C6BF4EC70CAECC88876B22DE41/",
-        name = "Bloomburrow",
-        date = "2024-08-12",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    MH3 = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33313055666331598/112B58990D8AD19B704448588F6CC34A8BF0E2E9/",
-        name = "Modern Horizons III",
-        date = "2024-06-14",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    MKM = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33313055666403145/D578E8D070D0F89BB866212A8C5FD97AE840F418/",
-        name = "Murders at Karlov Manor",
-        date = "2024-02-09",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    OTJ = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33313055666361741/B40E45A8AE490D38D02C8D32295E71920362D781/",
-        name = "Outlaws of Thunder Junction",
-        date = "2024-04-19",
-        getUrls = BoosterUrls.default14CardPack,
-    },
-    RVR = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/33313055666416970/8B9F38A1D618C5C025C45E8D484B097CA8F245EE/",
-        name = "Ravnica Remastered",
-        date = "2024-01-12",
-        getUrls = function(set)
-            return BoosterUrls.swapLandForCommon(BoosterUrls.default14CardPack(set))
-        end,
-    },
-    XLN = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/861734852198387392/B81155A30E28760116D166987C221F946D37380E/",
-        name = "Ixalan",
-        date = "2023-11-17",
-    },
-    MID = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/1734441450308868762/12F6CE09A39E5FEC3B472EBE54562B92A7332027/",
-        name = "Innistrad: Midnight Hunt",
-        date = "2021-09-24",
-        getUrls = function(set)
-            local urls = BoosterUrls.default15CardPack(set)
-            local transformIndex = math.random(#urls - 1, #urls)
-            for i, v in pairs(urls) do
-                local add = (i == 7 or (i == transformIndex))
-                urls[i] = v .. (add and '+is:transform' or '+-is:transform')
+            if parsed.has_more and parsed.next_page then
+                Wait.time(function()
+                    fetchPage(parsed.next_page, page + 1)
+                end, config.pageRequestSpacingSeconds)
+            else
+                finalize()
             end
-            return urls
-        end,
-    },
-    STX = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/1734441184603578733/2009A7D782D40F1456733EFE30ACC064D12B5FFD/",
-        name = "StrixHaven",
-        date = "2021-04-23",
-        getUrls = function(set)
-            local urls = {}
-            local setQuery = BoosterUrls.makeSetQuery('stx')
-            local archiveSetQuery = BoosterUrls.makeSetQuery('sta')
-            local mixedSetQuery = BoosterUrls.makeSetQuery({ 'stx', 'sta' })
-            table.insert(urls, BoosterUrls.makeUrl(setQuery, 't:land'))
-            for c in ('wubrg'):gmatch('.') do
-                table.insert(urls, BoosterUrls.makeUrl(setQuery, '-t:basic+r<r+c:' .. c))
-            end
-            table.insert(urls, BoosterUrls.makeUrl(setQuery, '-t:basic+r<r'))
-            table.insert(urls, BoosterUrls.makeUrl(mixedSetQuery, '-t:basic'))
-            table.insert(urls, BoosterUrls.makeUrl(setQuery, '-t:basic'))
-            table.insert(urls, BoosterUrls.makeUrl(setQuery, BoosterUrls.randomRarity(8, 1)))
-            table.insert(urls, BoosterUrls.makeUrl(setQuery, 't:lesson'))
-            table.insert(urls, BoosterUrls.makeUrl(archiveSetQuery, 'r>c+' .. (math.random(2) == 1 and 'lang:en' or 'lang:ja')))
-            return urls
-        end,
-    },
-    AFR = {
-        name = "Adventures in the Forgotten Realms",
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/1734441262522564318/D44434D1C56BA4A590591606A3A50EE4C9F607B8/",
-        date = "2021-07-23",
-    },
-    CMB1 = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/1871804141033719694/FE0CC0C11B5ADB27831BAAF0FF37E95852B6F454/",
-        name = "Mystery Booster Playtest Cards 2019",
-        date = "2019-11-07",
-        getUrls = function(set)
-            local urls = {}
-            local setQuery = BoosterUrls.makeSetQuery('mb1')
-            local url = BoosterUrls.makeUrl(setQuery, 's:mb1') -- seems to load s:plst (The List)
-            for c in ('wubrg'):gmatch('.') do
-                table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r<r+c=' .. c))
-                table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r<r+c=' .. c))
-            end
-            table.insert(urls, BoosterUrls.makeUrl(setQuery, 'c:m+r<r'))
-            table.insert(urls, BoosterUrls.makeUrl(setQuery, 'c:c+r<r'))
-            table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r>=r+frame:2015'))
-            table.insert(urls, BoosterUrls.makeUrl(setQuery, 'r>=r+-frame:2015'))
-            table.insert(urls, BoosterUrls.makeUrl(BoosterUrls.makeSetQuery('cmb1'), ''))
-            return urls
-        end,
-    },
-    UST = {
-        packImage = {
-            "https://steamusercontent-a.akamaihd.net/ugc/1869553886384090159/B009BD275EAA4E4D327CABF6E9C287FCF974CAE0/",
-            "https://steamusercontent-a.akamaihd.net/ugc/1869553886384088312/840D789FDE909D82F2943ADC26138DD838C6D3CD/",
-            "https://steamusercontent-a.akamaihd.net/ugc/1869553610271665770/97276A7B7774EF057E915B9A0AB9AC3F81221ED2/",
-        },
-        name = "Unstable",
-        date = "2017-12-08",
-    },
-    UGL = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/1869553610271718076/9F874EFF82054749352677189F63683DC038A17E/",
-        name = "Unglued",
-        date = "1998-08-11",
-    },
-    UNH = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/1869553610271611558/564F7D6B23A479883C84C4F5D90852CD4C056E9A/",
-        name = "Unhinged",
-        date = "2024-11-19",
-    },
-    VOW = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/2027238089146067515/FB7A98B9B0BE5C25098F63981C6C12BBE1036BA6/",
-        name = "Inistrad: Crimson Vow",
-        date = "2021-11-19",
-    },
-    UMA = {
-        packImage = "https://i.imgur.com/4RylXgU.png",
-        name = "Ultimate Masters",
-        date = "2018-12-07",
-    },
-    CMM = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/2093668098031059945/BF91A05DA4A788ED5F5C01B05305F3E4ECE8CE52/",
-        name = "Commander Masters",
-        date = "2023-08-04",
-        getUrls = BoosterUrls.default20CardPack,
-    },
-    MMA = {
-        packImage = "https://i.imgur.com/CU7EL6h.png",
-        name = "Modern Masters",
-        date = "2013-06-07",
-        getUrls = function(set)
-            return BoosterUrls.swapLandForCommon(BoosterUrls.default15CardPack(set))
-        end,
-    },
-    SOK = {
-        packImage = "https://i.imgur.com/ctFTHkw.jpg",
-        name = "Saviors of Kamigawa",
-        date = "2005-06-03",
-        getUrls = function(set)
-            return BoosterUrls.swapLandForCommon(BoosterUrls.default15CardPack(set))
-        end,
-    },
-    NEO = {
-        packImage = "https://i.imgur.com/5FcGpqC.png",
-        name = "Kamigawa: Neon Dynasty",
-        date = "2022-02-18",
-    },
-    DOM = {
-        name = "Dominaria",
-        date = "2018-04-27",
-        getUrls = function(set)
-            return BoosterUrls.addCardTypeToPack(BoosterUrls.default15CardPack(set), 't:legendary')
-        end,
-    },
-    WAR = {
-        name = "War of the Spark",
-        date = "2019-05-03",
-        getUrls = function(set)
-            return BoosterUrls.addCardTypeToPack(BoosterUrls.default15CardPack(set), 't:planeswalker')
-        end,
-    },
-    ZNR = {
-        name = "Zendikar Rising",
-        date = "2020-09-25",
-        getUrls = function(set)
-            return BoosterUrls.addCardTypeToPack(BoosterUrls.default15CardPack(set), 't:land+(is:spell+or+pathway)')
-        end,
-    },
-    CNS = {
-        name = "Conspiracy",
-        date = "2014-06-06",
-        getUrls = function(set)
-            return BoosterUrls.createReplacementSlotPack(BoosterUrls.default15CardPack(set), set, '+-wm:conspiracy', '+wm:conspiracy', 7)
-        end,
-    },
-    CN2 = {
-        name = "Conspiracy: Take the Crown",
-        date = "2016-08-26",
-        getUrls = function(set)
-            return BoosterUrls.createReplacementSlotPack(BoosterUrls.default15CardPack(set), set, '+-wm:conspiracy', '+wm:conspiracy', 7)
-        end,
-    },
-    ISD = {
-        getUrls = function(set)
-            return BoosterUrls.createReplacementSlotPack(BoosterUrls.default15CardPack(set), set, '+-is:transform', '+is:transform', 7)
-        end,
-    },
-    DKA = {
-        getUrls = function(set)
-            return BoosterUrls.createReplacementSlotPack(BoosterUrls.default15CardPack(set), set, '+-is:transform', '+is:transform', 7)
-        end,
-    },
-    SOI = {
-        getUrls = function(set)
-            return BoosterUrls.createReplacementSlotPack(BoosterUrls.default15CardPack(set), set, '+-is:transform', '+is:transform', 7)
-        end,
-    },
-    EMN = {
-        getUrls = function(set)
-            return BoosterUrls.createReplacementSlotPack(BoosterUrls.default15CardPack(set), set, '+-is:transform', '+is:transform', 7)
-        end,
-    },
-    ICE = {
-        getUrls = function(set)
-            return BoosterUrls.createReplacementSlotPack(BoosterUrls.default15CardPack(set), set, '', '+t:basic+t:snow+unique:prints')
-        end,
-    },
-    ALL = {
-        getUrls = function(set)
-            return BoosterUrls.createReplacementSlotPack(BoosterUrls.default15CardPack(set), set, '', '+t:basic+t:snow+unique:prints')
-        end,
-    },
-    CSP = {
-        getUrls = function(set)
-            local urls = BoosterUrls.default15CardPack(set)
-            urls[15] = urls[15]:gsub('r:m', 'r:r')
-            return BoosterUrls.createReplacementSlotPack(urls, set, '', 't:basic+t:snow+unique:prints')
-        end,
-    },
-    MH1 = {
-        getUrls = function(set)
-            return BoosterUrls.createReplacementSlotPack(BoosterUrls.default15CardPack(set), set, '', '+t:basic+t:snow+unique:prints')
-        end,
-    },
-    KHM = {
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/1734441450301159293/A7F7C010D0312D856CD8667678F5732BDB8F6EB2/",
-        name = "Kaldheim",
-        date = "2021-02-05",
-    },
-    LEA = {
-        name = "Limited Edition Alpha",
-        date = "1993-08-05",
-        packImage = "https://steamusercontent-a.akamaihd.net/ugc/11233057164064068203/C3F6F1252903B67720C40A2DBBAE54B3F8F6FD7A/",
-        getUrls = function(set)
-            return BoosterUrls.alphaCardPack(set)
-        end,
-    },
-}
-
--- any with names that cannot be lua keys can go below
-
-setDefinitions['???'] = {
-    getUrls = function(set)
-        return {}
-    end,
-}
-
-setDefinitions['2XM'] = {
-    packImage = "https://steamusercontent-a.akamaihd.net/ugc/2027238089151521799/52EC298FBB89EA2A24DA024981161F96E3522645/",
-    name = "Double Masters",
-    date = "2020-08-07",
-    getUrls = BoosterUrls.default16CardPack,
-}
-
------------------------------------------------------------------------
--- Main script
------------------------------------------------------------------------
-
-
-for code, setData in pairs(setDefinitions) do
-    setData.code = code
-    if not setData.name or setData.name == "" then
-        setData.name = code
+        end)
     end
+
+    fetchPage(scryfallSetClause(spec.sets), 1)
 end
 
-local function getSortedSetDefinitions()
-    local items = {}
-    for code, setData in pairs(setDefinitions) do
-        table.insert(items, {
-            code = code,
-            name = setData.name or code,
-            date = setData.date or "",
-            packImage = setData.packImage,
-            getUrls = setData.getUrls,
-        })
-    end
-
-    table.sort(items, function(a, b)
-        if a.date == b.date then
-            return a.code < b.code
-        end
-        return a.date > b.date
-    end)
-
-    return items
-end
-
-function onLoad()
-    updateObject()
-    data.lastDescription = self.getDescription()
-    if data.setCode == config.defaultSetCode then
-        self.addContextMenuItem("Spawn Boxes", spawnSupportedPacks)
-    end
-
-    if config.enableAutoUpdate then
-        AutoUpdater:run(self)
-    end
-end
-
-function onUpdate()
-    data.timePassed = data.timePassed + Time.delta_time
-    if data.timePassed >= config.pollInterval then
-        data.timePassed = 0
-        onUpdateTick()
-    end
-end
-
-function onUpdateTick()
-    if hasDescriptionChanged() then
-        updateObject()
-    end
-    PackBuilder.processRequestQueue()
-end
-
-function onObjectLeaveContainer(container, leaveObject)
-    if container ~= self then
-        return
-    end
-
-    local setData = setDefinitions[data.setCode]
-    if setData and setData.name then
-        leaveObject.setName(setData.name .. " Booster (" .. data.setCode .. ")")
-        leaveObject.setDescription("SET: " .. data.setCode .. (setData.date and "\nReleased: " .. setData.date or ""))
-    else
-        leaveObject.setName(data.setCode .. " Booster")
-    end
-
-    data.boosterCount = data.boosterCount + 1
-    local currentBoosterID = data.boosterCount
-
-    local urls = BoosterUrls.getSetUrls(data.setCode)
-    PackBuilder.fetchDeckData(currentBoosterID, data.setCode, urls, leaveObject)
-
-    leaveObject.createButton {
-        label = "generating " .. data.setCode,
-        click_function = "noop",
-        function_owner = self,
-        position = { 0, 0.2, -1.6 },
-        rotation = { 0, 0, 0 },
-        width = 1000,
-        height = 200,
-        font_size = 130,
-        color = { 0, 0, 0, 95 },
-        hover_color = { 0, 0, 0, 95 },
-        press_color = { 0, 0, 0, 95 },
-        font_color = { 1, 1, 1, 95 },
-    }
-
-    leaveObject.createButton {
-        label = "remaining: " .. #urls,
-        click_function = "noop",
-        function_owner = self,
-        position = { 0, 0.2, 1.6 },
-        rotation = { 0, 0, 0 },
-        width = 1000,
-        height = 200,
-        font_size = 130,
-        color = { 0, 0, 0, 95 },
-        hover_color = { 0, 0, 0, 95 },
-        press_color = { 0, 0, 0, 95 },
-        font_color = { 1, 1, 1, 95 },
-    }
-
-    leaveObject.setLuaScript("function tryObjectEnter() return false end")
-    leaveObject.setCustomObject({ diffuse = PackBuilder.getRandomPackImage(data.setCode) })
-
-    Wait.condition(
-            function()
-                Wait.condition(function()
-                    if leaveObject == null then
-                        return
-                    end
-                    local objectData = leaveObject.getData()
-                    leaveObject.destruct()
-                    objectData.ContainedObjects = PackBuilder.cache[currentBoosterID]
-                    local generatedBooster = spawnObjectData({ data = objectData })
-                    generatedBooster.setLuaScript(packLua)
-                end, function()
-                    return leaveObject == null or leaveObject.resting
-                end)
-            end,
-            function()
-                return PackBuilder.cache[currentBoosterID] ~= nil
-            end
-    )
-end
-
-function hasDescriptionChanged()
+local function hasDescriptionChanged()
     local description = self.getDescription()
     if description ~= data.lastDescription then
         data.lastDescription = description
         return true
     end
+    return false
 end
 
-function updateObject()
-    data.setCode = string.upper(self.getDescription()):match("SET:%s*(%S+)") or config.defaultSetCode
+local function setBoxName()
+    local spec = resolveSetSpec(data.setCode)
+    self.setName(spec.name .. " Booster Box")
+end
 
-    local packImage = PackBuilder.getRandomPackImage(data.setCode)
-    if self.getCustomObject().diffuse ~= packImage then
-        self.setCustomObject({ diffuse = packImage })
-        Wait.time(function()
-            self.reload()
-        end, 0.1)
-    end
+local function updateObject()
+    data.setCode = string.upper(self.getDescription()):match("SET:%s*(%S+)") or config.defaultSetCode
+    setBoxName()
 
     self.clearButtons()
-    if packImage == config.defaultPackImage then
+    if data.setCode == config.defaultSetCode then
+        self.createButton({
+            label = data.setCode .. " Boosters",
+            click_function = "noop",
+            function_owner = self,
+            position = { 0, 0.2, -1.6 },
+            rotation = { 0, 0, 0 },
+            width = 1000,
+            height = 200,
+            font_size = 130,
+            color = { 0, 0, 0, 95 },
+            hover_color = { 0, 0, 0, 95 },
+            press_color = { 0, 0, 0, 95 },
+            font_color = { 1, 1, 1, 95 }
+        })
+    else
         self.createButton({
             label = data.setCode .. " Boosters",
             click_function = "noop",
@@ -1369,51 +1153,252 @@ function updateObject()
     end
 end
 
-function spawnSupportedPacks()
-    local orderedSetCodes = {}
-    for setCode, setData in pairs(setDefinitions) do
-        if setData.packImage then
-            table.insert(orderedSetCodes, {
-                code = setCode,
-                name = setData.name,
-                date = setData.date,
-            })
-        end
+local function syncStateFromDescription()
+    local newCode = string.upper(self.getDescription()):match("SET:%s*(%S+)") or config.defaultSetCode
+    if newCode == data.setCode then
+        return
     end
-    table.sort(orderedSetCodes, function(a, b)
-        if not a.date then
-            return false
-        end
-        if not b.date then
-            return true
-        end
-        return a.date < b.date
-    end)
-    local startPos = self.getPosition() + Vector(3, 0, 0)
-    local cols, spacingX, spacingZ = 10, 3, 5
-    for index, setData in ipairs(orderedSetCodes) do
+
+    data.setCode = newCode
+    updateObject()
+
+    if data.setCode ~= config.defaultSetCode then
+        validateSetCode(data.setCode, function(valid)
+            setBoxName()
+            if not valid then
+                print("Invalid or unsupported set code: " .. tostring(data.setCode))
+            end
+        end)
+    else
+        data.validation.code = config.defaultSetCode
+        data.validation.state = "unknown"
+        data.validation.meta = nil
+        data.validation.message = nil
+    end
+end
+
+local function spawnPreviewBoxesInternal()
+    local startPos = self.getPosition() + Vector(config.previewSpacingX, 0, 0)
+    local cols = math.max(1, config.previewColumns)
+
+    for index, setCode in ipairs(config.previewSetCodes or {}) do
         Wait.time(function()
+            local code = safeUpper(setCode)
+            local spec = resolveSetSpec(code)
+
             local row = math.floor((index - 1) / cols)
             local col = (index - 1) % cols
-            local copy = self.clone({
+
+            local clone = self.clone({
                 position = {
-                    x = startPos.x + col * spacingX,
+                    x = startPos.x + col * config.previewSpacingX,
                     y = startPos.y,
-                    z = startPos.z - row * spacingZ,
+                    z = startPos.z - row * config.previewSpacingZ,
                 },
                 snap_to_grid = false,
             })
-            if setData and setData.name then
-                copy.setName(setData.name .. " Booster (" .. setData.code .. ")")
-                copy.setDescription("SET: " .. setData.code .. (setData.date and "\nReleased: " .. setData.date or ""))
-            else
-                copy.setName(setData.code .. " Booster")
+
+            if clone then
+                clone.setName(spec.name .. " Booster Box")
+                clone.setDescription("SET: " .. code)
             end
-        end, (index - 1) * 0.1)
+        end, (index - 1) * 0.05)
     end
+end
+
+function spawnPreviewBoxes()
+    spawnPreviewBoxesInternal()
+end
+
+-- stale safety alias for old objects / old buttons
+function spawnSupportedPacks()
+    spawnPreviewBoxesInternal()
 end
 
 function noop()
 end
 
--- Global.getVar('Encoder') -- comment needed to prevent mtg pi table falsely detecting this as a game-crashing or virus-infected object
+function onLoad()
+    updateObject()
+    data.lastDescription = self.getDescription()
+
+    if data.setCode == config.defaultSetCode then
+        self.addContextMenuItem("Spawn Boxes", spawnPreviewBoxes)
+    end
+end
+
+function onUpdate()
+    data.timePassed = data.timePassed + Time.delta_time
+    if data.timePassed >= config.pollInterval then
+        data.timePassed = 0
+        if hasDescriptionChanged() then
+            syncStateFromDescription()
+        end
+    end
+end
+
+function onObjectLeaveContainer(container, leaveObject)
+    if container ~= self then
+        return
+    end
+
+    local currentCode = data.setCode
+    local spec = resolveSetSpec(currentCode)
+
+    if spec and spec.name then
+        leaveObject.setName(spec.name .. " Booster (" .. currentCode .. ")")
+        leaveObject.setDescription("SET: " .. currentCode .. (spec.date and spec.date ~= "" and ("\nReleased: " .. spec.date) or ""))
+    else
+        leaveObject.setName(currentCode .. " Booster")
+        leaveObject.setDescription("SET: " .. currentCode)
+    end
+
+    data.boosterCount = data.boosterCount + 1
+    local currentBoosterID = data.boosterCount
+
+    leaveObject.createButton({
+        label = "generating " .. currentCode,
+        click_function = "noop",
+        function_owner = self,
+        position = { 0, 0.2, -1.6 },
+        rotation = { 0, 0, 0 },
+        width = 1000,
+        height = 200,
+        font_size = 130,
+        color = { 0, 0, 0, 95 },
+        hover_color = { 0, 0, 0, 95 },
+        press_color = { 0, 0, 0, 95 },
+        font_color = { 1, 1, 1, 95 },
+    })
+
+    leaveObject.createButton({
+        label = "resolving image...",
+        click_function = "noop",
+        function_owner = self,
+        position = { 0, 0.2, 1.6 },
+        rotation = { 0, 0, 0 },
+        width = 1000,
+        height = 200,
+        font_size = 130,
+        color = { 0, 0, 0, 95 },
+        hover_color = { 0, 0, 0, 95 },
+        press_color = { 0, 0, 0, 95 },
+        font_color = { 1, 1, 1, 95 },
+    })
+
+    leaveObject.setLuaScript("function tryObjectEnter() return false end")
+
+    local function startGeneration()
+        if currentCode == config.defaultSetCode then
+            PackBuilder.cache[currentBoosterID] = { PackBuilder.generateInstructionNotecard() }
+            return
+        end
+
+        if data.validation.code == currentCode and data.validation.state == "invalid" then
+            PackBuilder.cache[currentBoosterID] = {
+                PackBuilder.generateErrorNotecard({ message = data.validation.message or "Invalid set code." })
+            }
+            return
+        end
+
+        local resolvedSpec = resolveSetSpec(currentCode)
+        if resolvedSpec.spawnAll then
+            PackBuilder.fetchAllCardsForSet(currentBoosterID, currentCode, resolvedSpec, leaveObject)
+        else
+            local urls = BoosterUrls.getSetUrls(currentCode)
+            leaveObject.editButton({ index = 1, label = "remaining: " .. tostring(#urls) })
+            PackBuilder.fetchDeckData(currentBoosterID, currentCode, urls, leaveObject)
+        end
+    end
+
+    local function startAfterImage()
+        if data.validation.code == currentCode and data.validation.state == "valid" then
+            startGeneration()
+        elseif data.validation.code == currentCode and data.validation.state == "invalid" then
+            startGeneration()
+        else
+            leaveObject.editButton({ index = 1, label = "checking set..." })
+            validateSetCode(currentCode, function()
+                if leaveObject then
+                    startGeneration()
+                end
+            end)
+        end
+    end
+
+    if currentCode == config.defaultSetCode then
+        if leaveObject then
+            pcall(function()
+                leaveObject.editButton({
+                    index = 1,
+                    label = "default image loaded"
+                })
+            end)
+        end
+        Wait.time(function()
+            if leaveObject then
+                startAfterImage()
+            end
+        end, 0.05)
+    else
+        PackBuilder.applyResolvedPackImage(leaveObject, currentCode, function(finalUrl)
+            if leaveObject then
+                local usingFallback = finalUrl == config.defaultPackImage
+                pcall(function()
+                    leaveObject.editButton({
+                        index = 1,
+                        label = usingFallback and "default image loaded" or "custom image loaded"
+                    })
+                end)
+                Wait.time(function()
+                    if leaveObject then
+                        startAfterImage()
+                    end
+                end, 0.05)
+            end
+        end)
+    end
+
+    Wait.condition(
+        function()
+            Wait.condition(function()
+                if leaveObject == nil then
+                    return
+                end
+                local objectData = leaveObject.getData()
+                leaveObject.destruct()
+                objectData.ContainedObjects = PackBuilder.cache[currentBoosterID]
+                local generatedBooster = spawnObjectData({ data = objectData })
+                if generatedBooster then
+                    generatedBooster.setLuaScript(packLua)
+                end
+            end, function()
+                return leaveObject == nil or leaveObject.resting
+            end)
+        end,
+        function()
+            return PackBuilder.cache[currentBoosterID] ~= nil
+        end
+    )
+end
+
+function onChat(message, player)
+    local msg = tostring(message or "")
+    local cmd, arg = msg:match('^!booster%s+(%S+)%s*(.*)$')
+    if not cmd then
+        return
+    end
+
+    cmd = string.lower(cmd)
+
+    if cmd == "set" then
+        local setCode = safeUpper(arg)
+        if setCode ~= "" then
+            self.setDescription("SET: " .. setCode)
+            syncStateFromDescription()
+            print("Booster set changed to " .. setCode)
+        end
+    elseif cmd == "preview" then
+        spawnPreviewBoxesInternal()
+    end
+end
