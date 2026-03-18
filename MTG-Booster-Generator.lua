@@ -420,17 +420,10 @@ local function scryfallSetClause(sets)
 end
 
 local function inferPackImageUrl(setCode)
-    local code = safeUpper(setCode)
-
-    if code == "" or code == config.defaultSetCode then
-        return config.defaultPackImage
-    end
-
     if not config.imageBaseUrl or config.imageBaseUrl == "" then
         return config.defaultPackImage
     end
-
-    return config.imageBaseUrl .. string.lower(code) .. config.imageExtension
+    return config.imageBaseUrl .. string.lower(setCode) .. config.imageExtension
 end
 
 
@@ -1326,38 +1319,20 @@ function onObjectLeaveContainer(container, leaveObject)
         end
     end
 
-    if currentCode == config.defaultSetCode then
+    PackBuilder.applyResolvedPackImage(leaveObject, currentCode, function(finalUrl)
         if leaveObject then
-            pcall(function()
-                leaveObject.editButton({
-                    index = 1,
-                    label = "default image loaded"
-                })
-            end)
+            local usingFallback = finalUrl == config.defaultPackImage
+            leaveObject.editButton({
+                index = 1,
+                label = usingFallback and "default image loaded" or "custom image loaded"
+            })
+            Wait.time(function()
+                if leaveObject then
+                    startAfterImage()
+                end
+            end, 0.05)
         end
-        Wait.time(function()
-            if leaveObject then
-                startAfterImage()
-            end
-        end, 0.05)
-    else
-        PackBuilder.applyResolvedPackImage(leaveObject, currentCode, function(finalUrl)
-            if leaveObject then
-                local usingFallback = finalUrl == config.defaultPackImage
-                pcall(function()
-                    leaveObject.editButton({
-                        index = 1,
-                        label = usingFallback and "default image loaded" or "custom image loaded"
-                    })
-                end)
-                Wait.time(function()
-                    if leaveObject then
-                        startAfterImage()
-                    end
-                end, 0.05)
-            end
-        end)
-    end
+    end)
 
     Wait.condition(
         function()
