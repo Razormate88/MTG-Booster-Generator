@@ -104,28 +104,33 @@ local config = {
     apiBaseURL = 'https://api.scryfall.com/cards/random?q=',
     apiSearchBaseURL = 'https://api.scryfall.com/cards/search?q=',
     apiSetBaseURL = 'https://api.scryfall.com/sets/',
-    defaultPackImage = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/razor-booster-pack.jpg",
+    defaultPackImage = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/razor-booster-pack.jpg?v=20260319-1",
     defaultSetCode = "???",
     pollInterval = 0.25,
     maxDedupeAttempts = 8,
     requestRetryAttempts = 2,
 
+    -- request pacing / smoothness
+    requestSpacingSeconds = 0.05,
+    dedupeRetrySpacingSeconds = 0.10,
+    pageRequestSpacingSeconds = 0.05,
+
+    -- image fallback
+    packImageCheckTimeout = 8,
+
     -- Dynamic pack image lookup:
     -- FIN -> imageBaseUrl .. "fin" .. imageExtension
     imageBaseUrl = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/",
-    imageExtension = ".jpg",
+    imageExtension = ".jpg?v=20260319-1",
 
     -- Curated preview boxes only
     previewSetCodes = {
-        "TMT", "TMTC", "TMTT",
-        "FIN", "FINC",
-        "STX", "MID", "KHM",
-        "LEA", "CMM"
+        "TMT", "ECL", "TLA", "SPM", "PIP", "EOE", "FIN", "REX"
     },
 
-    previewColumns = 6,
-    previewSpacingX = 3,
-    previewSpacingZ = 6,
+    previewColumns = 20,
+    previewSpacingX = 2.75,
+    previewSpacingZ = 2.75,
 }
 
 local data = {
@@ -145,7 +150,7 @@ local data = {
 
 local packLua = [[
 local defaultSetCode = "???"
-local defaultPack = "https://steamusercontent-a.akamaihd.net/ugc/12555777445170015064/1F22F21DA19B1C5D668D761C2CA447889AE98A2A/"
+local defaultPack = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/razor-booster-pack.jpg"
 
 function tryObjectEnter()
     return false
@@ -190,15 +195,17 @@ function onLoad()
 
     if setCode ~= defaultSetCode and #self.getObjects() > 0 then
         self.createButton({
-            label = "Unpack",
+            label = "OPEN",
             click_function = "unpackDeck",
             function_owner = self,
-            position = { 0, 0.2, 0 },
+            position = { 0, 0.2, -1.2 },
             rotation = { 0, 0, 0 },
-            width = 600,
-            height = 200,
-            font_size = 150,
+            width = 1200,
+            height = 400,
+            font_size = 300,
             color = { 0, 0, 0, 95 },
+            hover_color = { 0, 0, 0, 95 },
+            press_color = { 0, 0, 0, 95 },
             font_color = { 1, 1, 1, 95 },
         })
     end
@@ -273,21 +280,24 @@ function noop()
 end
 ]]
 
+
 local BuiltInOverrides = {
     ['???'] = { profile = 'empty', preview = false },
 
     -- custom / mixed products
-    TMT  = { profile = 'default14', sets = { 'TMT', 'PZA' }, name = "Teenage Mutant Ninja Turtles" },
+    -- Regular play boosters use only the primary set so no cards from secondary
+    -- art/promo sets bleed in.  Collector boosters intentionally include them.
+    TMT  = { profile = 'play14', sets = { 'TMT' },              name = "Teenage Mutant Ninja Turtles" },
     TMTC = { profile = 'collector_custom', sets = { 'TMT', 'PZA' }, name = "Teenage Mutant Ninja Turtles Collector" },
     TMTT = { profile = 'spawn_all', sets = { 'TMTT' }, category = 'tokens', name = "Teenage Mutant Ninja Turtles Tokens" },
 
-    TLA  = { profile = 'default14', name = "Avatar: The Last Airbender" },
+    TLA  = { profile = 'play14', sets = { 'TLA' },              name = "Avatar: The Last Airbender" },
     TLAC = { profile = 'collector_custom', sets = { 'TLA', 'TLE' }, name = "Avatar: The Last Airbender Collector" },
 
-    SPM  = { profile = 'default14', sets = { 'SPM', 'MAR' }, name = "Marvel's Spider-Man" },
+    SPM  = { profile = 'play14', sets = { 'SPM' },              name = "Marvel's Spider-Man" },
     SPMC = { profile = 'collector_custom', sets = { 'SPM', 'MAR', 'SPE' }, name = "Marvel's Spider-Man Collector" },
 
-    FIN  = { profile = 'default14', sets = { 'FIN', 'FCA' }, name = "Final Fantasy" },
+    FIN  = { profile = 'play14', sets = { 'FIN' },              name = "Final Fantasy" },
     FINC = { profile = 'collector_custom', sets = { 'FIN', 'FCA', 'FIC' }, name = "Final Fantasy Collector" },
 
     -- special profiles
@@ -411,12 +421,59 @@ local function scryfallSetClause(sets)
     return "(" .. table.concat(clauses, " OR ") .. ")"
 end
 
+-- FIX 1: return default image immediately for "???" or any missing/empty code
+-- This prevents the malformed ???.jpg URL from ever being built or requested
 local function inferPackImageUrl(setCode)
+    if not setCode or setCode == "" or setCode == config.defaultSetCode then
+        return config.defaultPackImage
+    end
     if not config.imageBaseUrl or config.imageBaseUrl == "" then
         return config.defaultPackImage
     end
     return config.imageBaseUrl .. string.lower(setCode) .. config.imageExtension
 end
+
+
+-- FIX 2: silent fallback — no print, no reload() on leaveObject
+-- Removing obj.reload() here is intentional: the image is captured by getData()
+-- when the final booster is spawned, so reload() on the temp object is unnecessary
+-- AND causes a destroyed-object crash when the async callback fires late
+local function applyPackImage(obj, imageUrl)
+    if not obj then return end
+    local url = imageUrl or config.defaultPackImage
+    pcall(function()
+        obj.setCustomObject({ diffuse = url })
+    end)
+end
+
+-- FIX 3: silent fallback — swallow missing-image case without printing anything
+local function resolvePackImageUrl(setCode, callback)
+    local requestedUrl = inferPackImageUrl(setCode)
+
+    if not requestedUrl or requestedUrl == "" then
+        if callback then callback(config.defaultPackImage) end
+        return
+    end
+
+    if requestedUrl == config.defaultPackImage then
+        if callback then callback(config.defaultPackImage) end
+        return
+    end
+
+    WebRequest.get(requestedUrl, function(request)
+        local ok = request
+            and tonumber(request.response_code or 0) == 200
+            and not tostring(request.error or ""):match("%S")
+
+        if ok then
+            if callback then callback(requestedUrl) end
+        else
+            -- Silent fallback — no print, just use the default
+            if callback then callback(config.defaultPackImage) end
+        end
+    end)
+end
+
 
 local function makeHeaders()
     return {
@@ -440,8 +497,8 @@ BoosterUrls.default15CardPack = function(sets)
     return {
         joinQueries({ setClause, 'r:mythic' }),
         joinQueries({ setClause, 'r:rare' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
         joinQueries({ setClause, 'r:common' }),
         joinQueries({ setClause, 'r:common' }),
         joinQueries({ setClause, 'r:common' }),
@@ -462,7 +519,7 @@ BoosterUrls.default14CardPack = function(sets)
     return {
         joinQueries({ setClause, 'r:mythic' }),
         joinQueries({ setClause, 'r:rare' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
         joinQueries({ setClause, 'r:common' }),
         joinQueries({ setClause, 'r:common' }),
         joinQueries({ setClause, 'r:common' }),
@@ -487,13 +544,13 @@ BoosterUrls.default20CardPack = function(sets)
     for _ = 1, 6 do
         table.insert(out, joinQueries({ setClause, 'r:uncommon' }))
     end
-    table.insert(out, joinQueries({ setClause, 'r:rare OR r:mythic' }))
+    table.insert(out, joinQueries({ setClause, '(r:rare OR r:mythic)' }))
     return out
 end
 
 BoosterUrls.collectorCustomPack = function(sets)
     local setClause = scryfallSetClause(sets)
-    local flex = 'r:common OR r:uncommon OR r:rare OR r:mythic'
+    local flex = '(r:common OR r:uncommon OR r:rare OR r:mythic)'
     return {
         joinQueries({ setClause, flex }),
         joinQueries({ setClause, flex }),
@@ -505,11 +562,11 @@ BoosterUrls.collectorCustomPack = function(sets)
         joinQueries({ setClause, flex }),
         joinQueries({ setClause, flex }),
         joinQueries({ setClause, flex }),
-        joinQueries({ setClause, 'r:uncommon OR r:rare OR r:mythic' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, '(r:uncommon OR r:rare OR r:mythic)' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
     }
 end
 
@@ -528,7 +585,7 @@ BoosterUrls.strixhavenPlayPack = function(sets)
         joinQueries({ setClause, 'r:uncommon' }),
         joinQueries({ setClause, 'r:uncommon' }),
         joinQueries({ setClause, 'r:uncommon' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
         joinQueries({ '(set:sta OR ' .. setClause .. ')', '-is:lesson' }),
         joinQueries({ setClause, 'is:lesson' }),
     }
@@ -549,9 +606,9 @@ BoosterUrls.conspiracyPack = function(sets)
         joinQueries({ setClause, 'r:uncommon' }),
         joinQueries({ setClause, 'r:uncommon' }),
         joinQueries({ setClause, 'r:uncommon' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
         joinQueries({ setClause, 'is:conspiracy' }),
-        joinQueries({ setClause, 'r:common OR r:uncommon OR r:rare OR r:mythic' }),
+        joinQueries({ setClause, '(r:common OR r:uncommon OR r:rare OR r:mythic)' }),
     }
 end
 
@@ -590,15 +647,76 @@ BoosterUrls.mysteryPlaytestPack = function(sets)
         joinQueries({ setClause, 'r:uncommon' }),
         joinQueries({ setClause, 'r:uncommon' }),
         joinQueries({ setClause, 'r:uncommon' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
-        joinQueries({ setClause, 'r:rare OR r:mythic' }),
-        joinQueries({ setClause, 'frame:future OR is:playtest' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
+        joinQueries({ setClause, '(r:rare OR r:mythic)' }),
+        joinQueries({ setClause, '(frame:future OR is:playtest)' }),
         joinQueries({ setClause, 't:land' }),
     }
 end
 
+-- Proper MTG Play Booster — exactly 14 cards with correct rarity probabilities.
+--
+-- Slot breakdown (always sums to 14):
+--   rareCount   rare/mythic slots  (1–5, probabilistic)
+--   3           uncommon slots
+--   1           land slot          (t:land from set)
+--   1           foil slot          (<1% borderless mythic, else any rarity)
+--   9-rareCount common slots
+--
+-- Rarity odds (matching official Play Booster sheet):
+--   ~71.7%  → 1 rare/mythic
+--   ~25%    → 2 rares/mythics
+--   ~3%     → 3 rares/mythics
+--   <1%     → 4–5 rares/mythics
+BoosterUrls.play14Booster = function(sets)
+    local setClause = scryfallSetClause(sets)
+    local slots = {}
+
+    -- Determine rare/mythic count
+    local rareCount = 1
+    local r = math.random()
+    if r < 0.003 then
+        rareCount = (math.random() < 0.5) and 4 or 5   -- <1 %: 4 or 5
+    elseif r < 0.033 then
+        rareCount = 3                                    -- 3 %
+    elseif r < 0.283 then
+        rareCount = 2                                    -- 25 %
+    end
+    -- else: rareCount = 1  (~71.7 %)
+
+    -- Rare / Mythic slots
+    for _ = 1, rareCount do
+        table.insert(slots, joinQueries({ setClause, '(r:rare OR r:mythic)' }))
+    end
+
+    -- 3 Uncommons (standard middle of the 2-5 range)
+    for _ = 1, 3 do
+        table.insert(slots, joinQueries({ setClause, 'r:uncommon' }))
+    end
+
+    -- 1 Land slot
+    table.insert(slots, joinQueries({ setClause, 't:land' }))
+
+    -- 1 Foil slot: <1% chance it's a borderless mythic, otherwise any rarity
+    if math.random() < 0.01 then
+        table.insert(slots, joinQueries({ setClause, 'r:mythic is:borderless' }))
+    else
+        table.insert(slots, joinQueries({ setClause, '(r:common OR r:uncommon OR r:rare OR r:mythic)' }))
+    end
+
+    -- Commons fill remaining slots so total is always 14:
+    -- rareCount + 3 + 1 + 1 + commonCount = 14  →  commonCount = 9 - rareCount
+    local commonCount = math.max(0, 9 - rareCount)
+    for _ = 1, commonCount do
+        table.insert(slots, joinQueries({ setClause, 'r:common' }))
+    end
+
+    return slots
+end
+
 Profiles = {}
 Profiles.empty = function(spec) return {} end
+Profiles.play14 = function(spec) return BoosterUrls.play14Booster(spec.sets) end
 Profiles.default15 = function(spec) return BoosterUrls.default15CardPack(spec.sets) end
 Profiles.default14 = function(spec) return BoosterUrls.default14CardPack(spec.sets) end
 Profiles.default20 = function(spec) return BoosterUrls.default20CardPack(spec.sets) end
@@ -731,9 +849,20 @@ PackBuilder.getRandomPackImage = function(setCode)
     return inferPackImageUrl(setCode)
 end
 
+PackBuilder.applyResolvedPackImage = function(obj, setCode, callback)
+    resolvePackImageUrl(setCode, function(finalUrl)
+        if obj then
+            applyPackImage(obj, finalUrl)
+        end
+        if callback then
+            callback(finalUrl)
+        end
+    end)
+end
+
 local function inferProfileFromMeta(meta)
     if not meta then
-        return "default15"
+        return "play14"
     end
 
     local setType = string.lower(meta.set_type or "")
@@ -751,7 +880,7 @@ local function inferProfileFromMeta(meta)
         return "default20"
     end
 
-    return "default15"
+    return "play14"
 end
 
 local function resolveSetSpec(setCode)
@@ -785,7 +914,7 @@ end
 
 BoosterUrls.getSetUrls = function(setCode)
     local spec = resolveSetSpec(setCode)
-    local builder = Profiles[spec.profile] or Profiles.default15
+    local builder = Profiles[spec.profile] or Profiles.play14
     return BoosterUrls.reverseTable(builder(spec))
 end
 
@@ -883,40 +1012,38 @@ PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, atte
     end
 
     for j, query in ipairs(urls) do
-        local i = replaceIndices and replaceIndices[j] or j
-        local url = config.apiBaseURL .. urlEncode(query)
+        Wait.time(function()
+            local i = replaceIndices and replaceIndices[j] or j
+            local url = config.apiBaseURL .. urlEncode(query)
 
-        WebRequest.custom(url, "GET", true, nil, makeHeaders(), function(request)
-            if request.response_code == 200 then
-                local parsed = PackBuilder.safeDecode(request.text or "")
-                if parsed and parsed.object ~= "error" then
-                    local cardData = PackBuilder.createCardDataFromCardObject(parsed, i)
-                    if cardData then
-                        deck.ContainedObjects[i] = cardData
-                        deck.DeckIDs[i] = cardData.CardID
-                        deck.CustomDeck[i] = cardData.CustomDeck[i]
+            WebRequest.custom(url, "GET", true, nil, makeHeaders(), function(request)
+                if request.response_code == 200 then
+                    local parsed = PackBuilder.safeDecode(request.text or "")
+                    if parsed and parsed.object ~= "error" then
+                        local cardData = PackBuilder.createCardDataFromCardObject(parsed, i)
+                        if cardData then
+                            deck.ContainedObjects[i] = cardData
+                            deck.DeckIDs[i] = cardData.CardID
+                            deck.CustomDeck[i] = cardData.CustomDeck[i]
+                        else
+                            table.insert(requestErrors, { message = "Failed to decode card data." })
+                        end
                     else
-                        table.insert(requestErrors, { message = "Failed to decode card data." })
+                        table.insert(requestErrors, { message = "Scryfall returned an error for a card request." })
                     end
                 else
-                    table.insert(requestErrors, { message = "Scryfall returned an error for a card request." })
+                    table.insert(requestErrors, { message = "HTTP error " .. tostring(request.response_code) })
                 end
-            else
-                table.insert(requestErrors, { message = "HTTP error " .. tostring(request.response_code) })
-            end
-            finishRequest()
-        end)
+                finishRequest()
+            end)
+        end, (j - 1) * config.requestSpacingSeconds)
     end
-
     Wait.condition(function()
-        if leaveObject == nil then
-            return
-        end
-
+        -- BUG FIX: use pairs() instead of ipairs() — ipairs stops at nil holes
         local seen = {}
         local dupes = {}
 
-        for i, card in ipairs(deck.ContainedObjects) do
+        for i, card in pairs(deck.ContainedObjects) do
             if card then
                 local dedupKey = PackBuilder.getCardDedupKey(card)
                 if dedupKey and seen[dedupKey] then
@@ -935,14 +1062,58 @@ PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, atte
 
             Wait.time(function()
                 PackBuilder.fetchDeckData(boosterID, setCode, dupeUrls, leaveObject, attempts + 1, deck, dupes, originalUrls)
-            end, 0.1)
+            end, config.dedupeRetrySpacingSeconds)
         else
+            -- BUG FIX: compact sparse arrays before finalizing
+            -- Find the max numeric index that was actually written
+            local maxIdx = 0
+            for k in pairs(deck.ContainedObjects) do
+                if type(k) == "number" and k > maxIdx then maxIdx = k end
+            end
+
+            -- Collect cards in original slot order, skipping failed slots
+            local compactedCards = {}
+            for i = 1, maxIdx do
+                local card = deck.ContainedObjects[i]
+                if card then
+                    table.insert(compactedCards, card)
+                end
+            end
+
+            -- Rebuild deck tables with clean sequential indices
+            deck.ContainedObjects = {}
+            deck.DeckIDs        = {}
+            deck.CustomDeck     = {}
+
+            for newIdx, card in ipairs(compactedCards) do
+                local newCardID = newIdx * 100
+                -- Pull image entry regardless of what the old CustomDeck key was
+                local deckEntry = nil
+                for _, entry in pairs(card.CustomDeck or {}) do
+                    deckEntry = entry
+                    break
+                end
+                if deckEntry then
+                    card.CardID    = newCardID
+                    card.CustomDeck = { [newIdx] = deckEntry }
+                    deck.ContainedObjects[newIdx] = card
+                    deck.DeckIDs[newIdx]          = newCardID
+                    deck.CustomDeck[newIdx]        = deckEntry
+                end
+            end
+
+            local cardCount      = #deck.ContainedObjects
             local boosterContents = {}
 
             if setCode == config.defaultSetCode then
                 table.insert(boosterContents, PackBuilder.generateInstructionNotecard())
-            elseif #deck.ContainedObjects == 0 then
-                table.insert(boosterContents, PackBuilder.generateErrorNotecard({ message = "Could not generate any cards for this booster." }))
+            elseif cardCount == 0 then
+                table.insert(boosterContents, PackBuilder.generateErrorNotecard({
+                    message = "Could not generate any cards for this booster."
+                }))
+            elseif cardCount == 1 then
+                -- BUG FIX: TTS rejects a Deck with only 1 card — spawn the card directly
+                table.insert(boosterContents, deck.ContainedObjects[1])
             else
                 table.insert(boosterContents, deck)
             end
@@ -958,6 +1129,7 @@ PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, atte
     end)
 end
 
+
 PackBuilder.fetchAllCardsForSet = function(boosterID, setCode, spec, leaveObject)
     local deck = {
         Transform = { posX = 0, posY = 0, posZ = 0, rotX = 0, rotY = 180, rotZ = 0, scaleX = 1, scaleY = 1, scaleZ = 1 },
@@ -972,10 +1144,14 @@ PackBuilder.fetchAllCardsForSet = function(boosterID, setCode, spec, leaveObject
     local indexCounter = 0
 
     local function finalize()
-        if #deck.ContainedObjects == 0 then
+        local count = #deck.ContainedObjects
+        if count == 0 then
             PackBuilder.cache[boosterID] = {
                 PackBuilder.generateErrorNotecard({ message = "No cards found for this set." })
             }
+        elseif count == 1 then
+            -- BUG FIX: TTS cannot spawn a 1-card Deck
+            PackBuilder.cache[boosterID] = { deck.ContainedObjects[1] }
         else
             PackBuilder.cache[boosterID] = { deck }
         end
@@ -1020,7 +1196,9 @@ PackBuilder.fetchAllCardsForSet = function(boosterID, setCode, spec, leaveObject
             end
 
             if parsed.has_more and parsed.next_page then
-                fetchPage(parsed.next_page, page + 1)
+                Wait.time(function()
+                    fetchPage(parsed.next_page, page + 1)
+                end, config.pageRequestSpacingSeconds)
             else
                 finalize()
             end
@@ -1110,6 +1288,12 @@ local function spawnPreviewBoxesInternal()
     local startPos = self.getPosition() + Vector(config.previewSpacingX, 0, 0)
     local cols = math.max(1, config.previewColumns)
 
+    -- Get base object data once; strip contents so we don't clone all contained packs
+    local ok, selfData = pcall(function() return self.getData() end)
+    if not ok or not selfData then return end
+
+    local baseTransform = selfData.Transform or {}
+
     for index, setCode in ipairs(config.previewSetCodes or {}) do
         Wait.time(function()
             local code = safeUpper(setCode)
@@ -1118,19 +1302,48 @@ local function spawnPreviewBoxesInternal()
             local row = math.floor((index - 1) / cols)
             local col = (index - 1) % cols
 
-            local clone = self.clone({
-                position = {
-                    x = startPos.x + col * config.previewSpacingX,
-                    y = startPos.y,
-                    z = startPos.z - row * config.previewSpacingZ,
-                },
-                snap_to_grid = false,
-            })
-
-            if clone then
-                clone.setName(spec.name .. " Booster Box")
-                clone.setDescription("SET: " .. code)
+            -- Build per-box custom mesh/image data with set-specific diffuse baked in
+            local imageUrl = inferPackImageUrl(code)
+            local customMesh = nil
+            if type(selfData.CustomMesh) == "table" then
+                customMesh = {}
+                for k, v in pairs(selfData.CustomMesh) do customMesh[k] = v end
+                customMesh.DiffuseURL = imageUrl
             end
+            local customImage = nil
+            if type(selfData.CustomImage) == "table" then
+                customImage = {}
+                for k, v in pairs(selfData.CustomImage) do customImage[k] = v end
+                customImage.ImageURL = imageUrl
+            end
+
+            local boxData = {
+                Name        = selfData.Name,
+                Nickname    = spec.name .. " Booster Box",
+                Description = "SET: " .. code,
+                Transform   = {
+                    posX   = startPos.x + col * config.previewSpacingX,
+                    posY   = startPos.y,
+                    posZ   = startPos.z - row * config.previewSpacingZ,
+                    rotX   = baseTransform.rotX or 0,
+                    rotY   = baseTransform.rotY or 0,
+                    rotZ   = baseTransform.rotZ or 0,
+                    scaleX = baseTransform.scaleX or 1,
+                    scaleY = baseTransform.scaleY or 1,
+                    scaleZ = baseTransform.scaleZ or 1,
+                },
+                LuaScript      = selfData.LuaScript or "",
+                LuaScriptState = "",
+                CustomMesh     = customMesh,
+                CustomImage    = customImage,
+                Bag            = selfData.Bag,
+                Grid           = selfData.Grid,
+                Snap           = selfData.Snap,
+                Locked         = false,
+                ContainedObjects = selfData.ContainedObjects or {},
+            }
+
+            spawnObjectData({ data = boxData })
         end, (index - 1) * 0.05)
     end
 end
@@ -1201,7 +1414,7 @@ function onObjectLeaveContainer(container, leaveObject)
     })
 
     leaveObject.createButton({
-        label = "remaining: ...",
+        label = "resolving image...",
         click_function = "noop",
         function_owner = self,
         position = { 0, 0.2, 1.6 },
@@ -1216,7 +1429,6 @@ function onObjectLeaveContainer(container, leaveObject)
     })
 
     leaveObject.setLuaScript("function tryObjectEnter() return false end")
-    leaveObject.setCustomObject({ diffuse = PackBuilder.getRandomPackImage(currentCode) })
 
     local function startGeneration()
         if currentCode == config.defaultSetCode then
@@ -1241,34 +1453,71 @@ function onObjectLeaveContainer(container, leaveObject)
         end
     end
 
-    if data.validation.code == currentCode and data.validation.state == "valid" then
-        startGeneration()
-    elseif data.validation.code == currentCode and data.validation.state == "invalid" then
-        startGeneration()
-    else
-        leaveObject.editButton({ index = 1, label = "checking set..." })
-        validateSetCode(currentCode, function()
-            if leaveObject then
-                startGeneration()
-            end
-        end)
+    local function startAfterImage()
+        if data.validation.code == currentCode and data.validation.state == "valid" then
+            startGeneration()
+        elseif data.validation.code == currentCode and data.validation.state == "invalid" then
+            startGeneration()
+        else
+            leaveObject.editButton({ index = 1, label = "checking set..." })
+            validateSetCode(currentCode, function()
+                if leaveObject then
+                    startGeneration()
+                end
+            end)
+        end
     end
+
+    -- Sanitize the box's current diffuse: reject anything missing, non-http, or
+    -- containing ??? so TTS never attempts to load a bad URL.
+    local _boxDiffuse = (self.getCustomObject() or {}).diffuse or ""
+    local resolvedPackImage = (
+        _boxDiffuse ~= ""
+        and _boxDiffuse:match("^https?://")
+        and not _boxDiffuse:find("%?%?%?")
+    ) and _boxDiffuse or config.defaultPackImage
+
+    -- Apply the image to leaveObject RIGHT NOW, before TTS's renderer touches it.
+    -- Preview boxes are spawnObjectData-based so they won't be affected by this call.
+    applyPackImage(leaveObject, resolvedPackImage)
+
+    pcall(function()
+        leaveObject.editButton({ index = 1, label = "image ready" })
+    end)
+    Wait.time(function()
+        if leaveObject then
+            startAfterImage()
+        end
+    end, 0.05)
 
     Wait.condition(
         function()
             Wait.condition(function()
-                if leaveObject == nil then
+                -- BUG FIX: leaveObject isn't nil after destruct in TTS; use pcall
+                local ok, objectData = pcall(function() return leaveObject.getData() end)
+                if not ok or not objectData then
+                    PackBuilder.cache[currentBoosterID] = nil
                     return
                 end
-                local objectData = leaveObject.getData()
-                leaveObject.destruct()
+
+                pcall(function() leaveObject.destruct() end)
+
+                objectData.Locked = false
                 objectData.ContainedObjects = PackBuilder.cache[currentBoosterID]
+                PackBuilder.cache[currentBoosterID] = nil  -- BUG FIX: free cache entry
+
                 local generatedBooster = spawnObjectData({ data = objectData })
                 if generatedBooster then
+                    -- Apply image BEFORE setLuaScript so packLua's onLoad sees the
+                    -- correct diffuse when it checks custom.diffuse == defaultPack.
+                    applyPackImage(generatedBooster, resolvedPackImage)
                     generatedBooster.setLuaScript(packLua)
                 end
             end, function()
-                return leaveObject == nil or leaveObject.resting
+                -- BUG FIX: leaveObject.resting throws if the object was externally
+                -- destroyed; catch it so the condition resolves cleanly
+                local ok, resting = pcall(function() return leaveObject.resting end)
+                return (not ok) or resting
             end)
         end,
         function()
