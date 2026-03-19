@@ -1,6 +1,6 @@
 local AutoUpdater = {
     name = "Razormate's MTG Booster Generator",
-    version = "0.9.0",
+    version = "1.0.0",
     versionUrl = "https://raw.githubusercontent.com/Razormate88/MTG-Booster-Generator/refs/heads/main/MTG-Booster-Generator.ver",
     scriptUrl = "https://raw.githubusercontent.com/Razormate88/MTG-Booster-Generator/refs/heads/main/MTG-Booster-Generator.lua",
     debug = false,
