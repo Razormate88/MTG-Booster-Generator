@@ -104,33 +104,34 @@ local config = {
     apiBaseURL = 'https://api.scryfall.com/cards/random?q=',
     apiSearchBaseURL = 'https://api.scryfall.com/cards/search?q=',
     apiSetBaseURL = 'https://api.scryfall.com/sets/',
-    defaultPackImage = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/razor-booster-pack.jpg?v=20260319-1",
+    defaultPackImage = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/pack-images/razor-booster-pack.jpg?v=20260319-2",
     defaultSetCode = "???",
     pollInterval = 0.25,
     maxDedupeAttempts = 8,
     requestRetryAttempts = 2,
 
     -- request pacing / smoothness
-    requestSpacingSeconds = 0.05,
-    dedupeRetrySpacingSeconds = 0.10,
-    pageRequestSpacingSeconds = 0.05,
+    requestSpacingSeconds = 0.1,
+    dedupeRetrySpacingSeconds = 0.1,
+    pageRequestSpacingSeconds = 0.1,
 
     -- image fallback
     packImageCheckTimeout = 8,
 
     -- Dynamic pack image lookup:
     -- FIN -> imageBaseUrl .. "fin" .. imageExtension
-    imageBaseUrl = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/",
-    imageExtension = ".jpg?v=20260319-1",
+    imageBaseUrl = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/pack-images/",
+    imageExtension = ".jpg?v=20260319-2",
 
     -- Curated preview boxes only
     previewSetCodes = {
-        "TMT", "ECL", "TLA", "SPM", "PIP", "EOE", "FIN", "REX"
+        "TMT", "ECL", "TLA", "SPM", "PIP", "EOE", "FIN", "REX", "TDM", "DFT", "INR", "FDN", "DSK", "BLB", "MB2", "ACR", "MH3", "OTJ", "MKM",
+        "RVR"
     },
 
-    previewColumns = 20,
+    previewColumns = 19,
     previewSpacingX = 2.75,
-    previewSpacingZ = 2.75,
+    previewSpacingZ = 4.75,
 }
 
 local data = {
@@ -150,7 +151,7 @@ local data = {
 
 local packLua = [[
 local defaultSetCode = "???"
-local defaultPack = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/images/razor-booster-pack.jpg"
+local defaultPack = "https://cdn.jsdelivr.net/gh/Razormate88/MTG-Booster-Generator/pack-images/razor-booster-pack.jpg?v=20260319-2"
 
 function tryObjectEnter()
     return false
@@ -181,15 +182,15 @@ function onLoad()
             label = setCode and (setCode .. " Booster") or self.getName(),
             click_function = 'noop',
             function_owner = self,
-            position = { 0, 0.2, -1.6 },
+            position = { 0, 0.2, -5 },
             rotation = { 0, 0, 0 },
             width = 1000,
             height = 200,
             font_size = 150,
-            color = { 0, 0, 0, 95 },
-            hover_color = { 0, 0, 0, 95 },
-            press_color = { 0, 0, 0, 95 },
-            font_color = { 1, 1, 1, 95 },
+            color = { 0, 0, 0, 1 },
+            hover_color = { 1, 1, 1, 1 },
+            press_color = { 0, 1, 0, 1 },
+            font_color = { 1, 1, 1, 1 },
         })
     end
 
@@ -198,15 +199,15 @@ function onLoad()
             label = "OPEN",
             click_function = "unpackDeck",
             function_owner = self,
-            position = { 0, 0.2, -1.2 },
+            position = { 0, 0.2, 0 },
             rotation = { 0, 0, 0 },
-            width = 1200,
-            height = 400,
+            width = 1000,
+            height = 300,
             font_size = 300,
-            color = { 0, 0, 0, 95 },
-            hover_color = { 0, 0, 0, 95 },
-            press_color = { 0, 0, 0, 95 },
-            font_color = { 1, 1, 1, 95 },
+            color = { 0, 0, 0, 1 },
+            hover_color = { 0, 0, 0, 1 },
+            press_color = { 0, 0, 0, 1 },
+            font_color = { 1, 1, 1, 1 },
         })
     end
 end
@@ -239,8 +240,8 @@ function spreadDeck(deck)
 
     local startPos = self.getPosition() + Vector(-2.3 * 2, 2, 3.2)
     local colCount = 5
-    local spacingX = 2.3
-    local spacingZ = 3.2
+    local spacingX = 2.25
+    local spacingZ = 3.1
     local total = 1
 
     if deck.tag == "Deck" then
@@ -684,31 +685,43 @@ BoosterUrls.play14Booster = function(sets)
     end
     -- else: rareCount = 1  (~71.7 %)
 
-    -- Rare / Mythic slots
+    -- Rare / Mythic slots — exclude lands so a dual-land-with-rare-rarity
+    -- doesn't eat a rare slot AND bloat the land count
     for _ = 1, rareCount do
-        table.insert(slots, joinQueries({ setClause, '(r:rare OR r:mythic)' }))
+        table.insert(slots, joinQueries({ setClause, '(r:rare OR r:mythic) -t:land' }))
     end
 
-    -- 3 Uncommons (standard middle of the 2-5 range)
+    -- 3 Uncommons — exclude lands
     for _ = 1, 3 do
-        table.insert(slots, joinQueries({ setClause, 'r:uncommon' }))
+        table.insert(slots, joinQueries({ setClause, 'r:uncommon -t:land' }))
     end
 
-    -- 1 Land slot
+    -- 1 dedicated Land slot (always present)
     table.insert(slots, joinQueries({ setClause, 't:land' }))
 
-    -- 1 Foil slot: <1% chance it's a borderless mythic, otherwise any rarity
-    if math.random() < 0.01 then
-        table.insert(slots, joinQueries({ setClause, 'r:mythic is:borderless' }))
+    -- 1 Foil slot:
+    --   20% → foil land  (gives the maximum possible 2 lands: 1 regular + 1 foil)
+    --   <1% → foil borderless mythic (non-land)
+    --   else → foil card of any rarity, explicitly not a land
+    local foilRoll = math.random()
+    if foilRoll < 0.20 then
+        -- Traditional Foil Land (20 % of boosters)
+        table.insert(slots, joinQueries({ setClause, 't:land' }))
+    elseif foilRoll < 0.21 then
+        -- Foil Borderless Mythic (<1 %)
+        table.insert(slots, joinQueries({ setClause, 'r:mythic is:borderless -t:land' }))
     else
-        table.insert(slots, joinQueries({ setClause, '(r:common OR r:uncommon OR r:rare OR r:mythic)' }))
+        -- Standard foil — any rarity, never a land
+        table.insert(slots, joinQueries({ setClause, '(r:common OR r:uncommon OR r:rare OR r:mythic) -t:land' }))
     end
 
-    -- Commons fill remaining slots so total is always 14:
-    -- rareCount + 3 + 1 + 1 + commonCount = 14  →  commonCount = 9 - rareCount
+    -- Commons fill remaining slots so total is always 14.
+    -- rareCount + 3 uncommons + 1 land + 1 foil + commonCount = 14
+    -- → commonCount = 9 - rareCount
     local commonCount = math.max(0, 9 - rareCount)
     for _ = 1, commonCount do
-        table.insert(slots, joinQueries({ setClause, 'r:common' }))
+        -- Exclude lands — r:common includes basic lands in many sets
+        table.insert(slots, joinQueries({ setClause, 'r:common -t:land' }))
     end
 
     return slots
@@ -776,73 +789,104 @@ PackBuilder.generateInstructionNotecard = function()
     }
 end
 
-PackBuilder.findCardImage = function(card)
-    if not card then
+-- Returns the formatted card name with type line and CMC — matches the original.
+PackBuilder.formattedName = function(face, typeSuffix)
+    return string.format(
+        '%s\n%s CMC %s%s',
+        (face.name or ""):gsub('"', ''),
+        face.type_line or "",
+        tostring(face.cmc or 0),
+        typeSuffix and (" " .. typeSuffix) or ""
+    ):gsub('%s+$', '')
+end
+
+-- Returns oracle text plus power/toughness or loyalty — matches the original.
+PackBuilder.getCardOracleText = function(cardFace)
+    local pt = ""
+    if cardFace.power then
+        pt = '\n[b]' .. cardFace.power .. '/' .. cardFace.toughness .. '[/b]'
+    elseif cardFace.loyalty then
+        pt = '\n[b]' .. tostring(cardFace.loyalty) .. '[/b]'
+    end
+    return (cardFace.oracle_text or "") .. pt
+end
+
+-- Builds the full TTS card data from a Scryfall card object.
+-- Uses large-quality images, formatted names, oracle text descriptions,
+-- DFC States, and a cache-buster for non-highres scans — exactly as the original did.
+PackBuilder.createCardDataFromCardObject = function(card, cardIndex)
+    if not card or not card.name then
         return nil
     end
-    if card.image_uris and card.image_uris.normal then
-        return card.image_uris.normal
-    end
+
+    local imageQuality = 'large'
+    local cacheBuster  = (card.image_status ~= 'highres_scan') and ('?' .. os.date("%Y%m%d")) or ""
+
+    local cardName, cardOracle, faceURL, backData
+
     if card.card_faces then
-        for _, face in ipairs(card.card_faces) do
-            if face.image_uris and face.image_uris.normal then
-                return face.image_uris.normal
+        if card.image_uris then
+            -- Flip / adventure / split — single image, multiple faces
+            cardName = PackBuilder.formattedName(card.card_faces[1])
+            cardOracle = ""
+            for i, face in ipairs(card.card_faces) do
+                cardOracle = cardOracle .. PackBuilder.formattedName(face) .. '\n' .. PackBuilder.getCardOracleText(face)
+                if i < #card.card_faces then cardOracle = cardOracle .. '\n' end
             end
+            faceURL = card.image_uris.normal:gsub('%?.*', ''):gsub('normal', imageQuality) .. cacheBuster
+        else
+            -- True double-faced (transform / modal DFC) — two separate images
+            local face = card.card_faces[1]
+            local back = card.card_faces[2]
+            cardName   = PackBuilder.formattedName(face, 'DFC')
+            cardOracle = PackBuilder.getCardOracleText(face)
+            faceURL    = face.image_uris.normal:gsub('%?.*', ''):gsub('normal', imageQuality) .. cacheBuster
+            local backURL      = back.image_uris.normal:gsub('%?.*', ''):gsub('normal', imageQuality) .. cacheBuster
+            local backIndex    = cardIndex + 100
+            backData = {
+                Transform  = { posX=0, posY=0, posZ=0, rotX=0, rotY=0, rotZ=0, scaleX=1, scaleY=1, scaleZ=1 },
+                Name       = "Card",
+                Nickname   = PackBuilder.formattedName(back, 'DFC'),
+                Description = PackBuilder.getCardOracleText(back),
+                Memo       = card.oracle_id,
+                CardID     = backIndex * 100,
+                CustomDeck = {
+                    [backIndex] = {
+                        FaceURL = backURL, BackURL = config.backURL,
+                        NumWidth = 1, NumHeight = 1,
+                        Type = 0, BackIsHidden = true, UniqueBack = false,
+                    }
+                }
+            }
         end
-    end
-    return nil
-end
-
-PackBuilder.getCardDedupKey = function(cardData)
-    if not cardData then
-        return nil
-    end
-    return tostring(cardData.Nickname or "") .. "|" .. tostring(cardData.Description or "")
-end
-
-PackBuilder.createCardDataFromCardObject = function(card, index)
-    local image = PackBuilder.findCardImage(card)
-    if not image then
-        return nil
+    else
+        -- Normal single-faced card
+        cardName   = PackBuilder.formattedName(card)
+        cardOracle = PackBuilder.getCardOracleText(card)
+        faceURL    = card.image_uris.normal:gsub('%?.*', ''):gsub('normal', imageQuality) .. cacheBuster
     end
 
-    local setCode = safeUpper(card.set)
-    local collector = tostring(card.collector_number or "")
-    local oracleId = tostring(card.oracle_id or card.id or "")
-
-    local description = "SET: " .. setCode
-    if collector ~= "" then
-        description = description .. "\nCOLLECTOR: " .. collector
-    end
-    if oracleId ~= "" then
-        description = description .. "\nORACLE: " .. oracleId
-    end
-
-    local cardID = index * 100
-    return {
-        Name = "Card",
-        Nickname = card.name or "Unknown Card",
-        Description = description,
-        CardID = cardID,
+    local cardData = {
+        Transform  = { posX=0, posY=0, posZ=0, rotX=0, rotY=0, rotZ=0, scaleX=1, scaleY=1, scaleZ=1 },
+        Name       = "Card",
+        Nickname   = cardName,
+        Description = cardOracle,
+        Memo       = card.oracle_id,
+        CardID     = cardIndex * 100,
         CustomDeck = {
-            [index] = {
-                FaceURL = image,
-                BackURL = config.backURL,
-                NumWidth = 1,
-                NumHeight = 1,
-                BackIsHidden = true,
-                UniqueBack = false,
-                Type = 0,
+            [cardIndex] = {
+                FaceURL = faceURL, BackURL = config.backURL,
+                NumWidth = 1, NumHeight = 1,
+                Type = 0, BackIsHidden = true, UniqueBack = false,
             }
         }
     }
-end
 
-PackBuilder.extractUniqueCardKey = function(card)
-    if not card then
-        return nil
+    if backData then
+        cardData.States = { [2] = backData }
     end
-    return tostring(card.id or (tostring(card.oracle_id or "") .. ":" .. tostring(card.collector_number or "") .. ":" .. tostring(card.set or "")))
+
+    return cardData
 end
 
 PackBuilder.getRandomPackImage = function(setCode)
@@ -1045,11 +1089,10 @@ PackBuilder.fetchDeckData = function(boosterID, setCode, urls, leaveObject, atte
 
         for i, card in pairs(deck.ContainedObjects) do
             if card then
-                local dedupKey = PackBuilder.getCardDedupKey(card)
-                if dedupKey and seen[dedupKey] then
+                if seen[card.Nickname] then
                     table.insert(dupes, i)
                 else
-                    seen[dedupKey] = true
+                    seen[card.Nickname] = true
                 end
             end
         end
@@ -1226,38 +1269,8 @@ local function updateObject()
     data.setCode = string.upper(self.getDescription()):match("SET:%s*(%S+)") or config.defaultSetCode
     setBoxName()
 
+    -- No label button — the box image already shows the set name.
     self.clearButtons()
-    if data.setCode == config.defaultSetCode then
-        self.createButton({
-            label = data.setCode .. " Boosters",
-            click_function = "noop",
-            function_owner = self,
-            position = { 0, 0.2, -1.6 },
-            rotation = { 0, 0, 0 },
-            width = 1000,
-            height = 200,
-            font_size = 130,
-            color = { 0, 0, 0, 95 },
-            hover_color = { 0, 0, 0, 95 },
-            press_color = { 0, 0, 0, 95 },
-            font_color = { 1, 1, 1, 95 }
-        })
-    else
-        self.createButton({
-            label = data.setCode .. " Boosters",
-            click_function = "noop",
-            function_owner = self,
-            position = { 0, 0.2, -1.6 },
-            rotation = { 0, 0, 0 },
-            width = 1000,
-            height = 200,
-            font_size = 130,
-            color = { 0, 0, 0, 95 },
-            hover_color = { 0, 0, 0, 95 },
-            press_color = { 0, 0, 0, 95 },
-            font_color = { 1, 1, 1, 95 }
-        })
-    end
 end
 
 local function syncStateFromDescription()
@@ -1468,17 +1481,27 @@ function onObjectLeaveContainer(container, leaveObject)
         end
     end
 
-    -- Sanitize the box's current diffuse: reject anything missing, non-http, or
-    -- containing ??? so TTS never attempts to load a bad URL.
-    local _boxDiffuse = (self.getCustomObject() or {}).diffuse or ""
-    local resolvedPackImage = (
-        _boxDiffuse ~= ""
-        and _boxDiffuse:match("^https?://")
-        and not _boxDiffuse:find("%?%?%?")
-    ) and _boxDiffuse or config.defaultPackImage
+    -- Resolve the pack image from the set code when possible.
+    -- inferPackImageUrl already returns config.defaultPackImage for ??? so this
+    -- is safe for every case.  We only fall back to reading the box's own diffuse
+    -- if the set code somehow produced the default (e.g. the box is still ???),
+    -- and even then we sanitise it so ??? .jpg can never reach TTS.
+    local resolvedPackImage
+    if currentCode ~= config.defaultSetCode then
+        -- Build the CDN URL directly from the set code — works for both manually
+        -- typed set codes on the original box AND spawned preview boxes.
+        resolvedPackImage = inferPackImageUrl(currentCode)
+    else
+        -- ??? box: use the box's own diffuse, sanitised.
+        local _boxDiffuse = (self.getCustomObject() or {}).diffuse or ""
+        resolvedPackImage = (
+            _boxDiffuse ~= ""
+            and _boxDiffuse:match("^https?://")
+            and not _boxDiffuse:find("%?%?%?")
+        ) and _boxDiffuse or config.defaultPackImage
+    end
 
-    -- Apply the image to leaveObject RIGHT NOW, before TTS's renderer touches it.
-    -- Preview boxes are spawnObjectData-based so they won't be affected by this call.
+    -- Apply the image to leaveObject immediately, before TTS's renderer touches it.
     applyPackImage(leaveObject, resolvedPackImage)
 
     pcall(function()
